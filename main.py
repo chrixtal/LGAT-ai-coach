@@ -1,6 +1,7 @@
 import os
 import sys
 import requests
+import json
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -35,15 +36,23 @@ def ask_dify(user_id, text):
         "inputs": {},
         "query": text,
         "response_mode": "blocking",
-        "user": user_id,  # 使用 Line userId 區分不同人的對話記憶
+        "user": user_id,
     }
     try:
-        response = requests.post(url, headers=headers, json=json.dumps(data), timeout=30)
-        return response.json().get('answer', "AI 教練暫時無法回應，請稍後再試。")
+        # 修改這裡：直接傳入 json=data，不要用 json.dumps(data)
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+        
+        if response.status_code == 200:
+            return response.json().get('answer')
+        else:
+            # 這裡可以幫你抓出是不是 API Key 或 網址填錯
+            error_msg = response.json().get('message', '未知錯誤')
+            return f"Dify 回傳錯誤 ({response.status_code}): {error_msg}"
+            
     except Exception as e:
         print(f"Dify API Error: {e}")
         return "對不起，我現在連不上大腦，請檢查 API 設定。"
-
+    
 # --- 3. Line Webhook 進入點 ---
 @app.post("/callback")
 async def callback(request: Request):
