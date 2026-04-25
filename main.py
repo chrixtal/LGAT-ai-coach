@@ -115,19 +115,6 @@ def get_profile(line_user_id: str) -> dict:
 def save_profile(line_user_id: str, **kwargs):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    fields = ', '.join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [line_user_id]
-    c.execute(f'''
-        INSERT INTO user_profiles (line_user_id, {", ".join(kwargs.keys())})
-        VALUES (?, {", ".join("?" for _ in kwargs)})
-        ON CONFLICT(line_user_id) DO UPDATE SET {fields}, updated_at = CURRENT_TIMESTAMP
-    ''', [line_user_id] + list(kwargs.values()) + list(kwargs.values()) + [line_user_id])
-    # 換個更安全的寫法
-    conn.close()
-
-    # 直接用 upsert-safe 方式
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
     # 確保 row 存在
     c.execute('INSERT OR IGNORE INTO user_profiles (line_user_id) VALUES (?)', (line_user_id,))
     for k, v in kwargs.items():
