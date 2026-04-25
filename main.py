@@ -216,7 +216,7 @@ def handle_onboarding(line_user_id: str, text: str, profile: dict) -> str | None
         if line_name:
             save_profile(line_user_id, display_name=line_name, onboarding_step=2)
             return (
-                f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水。\n\n"
+                f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水 🌊\n\n"
                 f"在開始之前，想先了解你喜歡什麼樣的教練風格！\n\n"
                 + _build_tone_question()
             )
@@ -224,7 +224,7 @@ def handle_onboarding(line_user_id: str, text: str, profile: dict) -> str | None
             # 抓不到暱稱，才問名字
             save_profile(line_user_id, onboarding_step=1)
             return (
-                "👋 嗨！我是你的 AI 生活教練 澄若水。\n\n"
+                "👋 嗨！我是你的 AI 生活教練 澄若水 🌊\n\n"
                 "在開始之前，我想先多了解你一點！\n\n"
                 "❶ 你怎麼稱呼你自己呢？（輸入你的名字或暱稱就好）"
             )
@@ -277,7 +277,7 @@ def handle_onboarding(line_user_id: str, text: str, profile: dict) -> str | None
             f"• 引用頻率：{quote_label}\n\n"
             f"從現在開始，我就是你的專屬教練了 💪\n"
             f"有什麼想聊的，直接說吧！\n\n"
-            f"（隨時可以用 /setting 重新調整教練風格）"
+            f"（隨時可以輸入 ⚙️ /setting 重新調整教練風格）"
         )
 
     return None
@@ -331,7 +331,7 @@ def ask_dify(user_id: str, text: str, profile: dict) -> str:
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "我想到一半忘記說什麼了，請再問我一次！"
+        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
@@ -340,7 +340,9 @@ def ask_dify(user_id: str, text: str, profile: dict) -> str:
                 print(f"[Dify Fallback] 啟動備援 | user={user_id}")
                 result = call_dify(DIFY_API_KEY_FALLBACK, user_id, text, None, inputs)
                 answer = result.get('answer', '').strip()
-                return ("⚡️ 我暫時切換到備用系統回答你：\n\n" + answer) if answer else "備援系統也沒回應，請稍後再試！"
+                return ("⚡️ 我暫時切換到備用系統回答你：
+
+" + answer) if answer else "😓 備援系統也沒回應，請稍後再試！"
             except Exception as fe:
                 print(f"[Dify Fallback] 失敗: {fe}")
         return (
@@ -357,15 +359,19 @@ def ask_dify(user_id: str, text: str, profile: dict) -> str:
             pass
         print(f"[Dify] HTTP 錯誤 {status}: {error_msg} | user={user_id}")
         return (
-            f"🔧 我遇到了一點小問題（錯誤碼：{status}），先去找 Chris 修一下！\n\n"
-            "請稍後再試，或直接聯絡開發者 Chris 回報這個問題，感謝你 💪"
+            f"🔧 我遇到了一點小問題（錯誤碼：{status}）⋯
+
+"
+            "先去找 Chris 修一下，請稍後再試！感謝你的耐心 💪"
         )
 
     except Exception as e:
         print(f"[Dify] 未預期錯誤: {e} | user={user_id}")
         return (
-            "🤔 我剛才靈魂出竅了一下，請再問我一次！\n\n"
-            "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 😊"
+            "😵 我剛才靈魂出竅了一下，請再問我一次！
+
+"
+            "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
         )
 
 # ============================
@@ -374,10 +380,10 @@ def ask_dify(user_id: str, text: str, profile: dict) -> str:
 
 HELP_TEXT = """🤖 指令說明：
 
-/reset    — 清除對話記憶，重新開始
-/setting  — 重新設定教練風格
-/profile  — 查看目前的設定
-/help     — 顯示這個說明
+🔄 /reset    — 清除對話記憶，重新開始
+⚙️ /setting  — 重新設定教練風格
+📋 /profile  — 查看目前的設定
+❓ /help     — 顯示這個說明
 
 直接輸入文字就能和我對話！"""
 
@@ -386,14 +392,18 @@ def handle_command(user_id: str, text: str, profile: dict) -> str | None:
 
     if cmd == '/reset':
         reset_conversation(user_id)
-        return "🔄 對話記憶已清除！我們重新開始吧，有什麼想聊的？"
+        return "🔄 對話記憶已清除！
+
+我們重新開始吧～有什麼想聊的？😊"
 
     if cmd == '/help':
         return HELP_TEXT
 
     if cmd == '/setting':
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
-        return "好的，我們來重新設定教練風格！\n\n" + _build_tone_question()
+        return "⚙️ 好的！我們來重新調整一下～
+
+" + _build_tone_question()
 
     if cmd == '/profile':
         name = profile.get('display_name') or '未設定'
