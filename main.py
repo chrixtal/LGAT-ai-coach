@@ -1,6 +1,6 @@
 import os
 import sqlite3
-import json
+import threading
 import requests
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
@@ -15,7 +15,31 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
-DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')  # 備援 App Key
+DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+
+# ============================
+# 教練設定（從環境變數讀取，不寫死）
+# ============================
+# 語氣選項：key=用戶輸入數字, value=(內部值, 顯示名稱, Dify描述)
+TONE_OPTIONS = {}
+for i, raw in enumerate(os.environ.get('COACH_TONE_OPTIONS', 'strict:嚴格督促型:嚴格督促|gentle:溫柔支持型:溫柔支持|balanced:平衡理性型:平衡理性').split('|'), 1):
+    parts = raw.split(':')
+    if len(parts) == 3:
+        TONE_OPTIONS[str(i)] = {'value': parts[0], 'label': parts[1], 'dify': parts[2]}
+
+# 溝通方式選項
+STYLE_OPTIONS = {}
+for i, raw in enumerate(os.environ.get('COACH_STYLE_OPTIONS', 'direct:直接說重點:直接說重點|exploratory:循循善誘:循循善誘、引導探索').split('|'), 1):
+    parts = raw.split(':')
+    if len(parts) == 3:
+        STYLE_OPTIONS[str(i)] = {'value': parts[0], 'label': parts[1], 'dify': parts[2]}
+
+# 引用頻率選項
+QUOTE_OPTIONS = {}
+for i, raw in enumerate(os.environ.get('COACH_QUOTE_OPTIONS', 'often:多引用:頻繁引用名言、學術理論或研究數據來增加說服力|sometimes:偶爾引用:偶爾適時引用即可|never:不引用:不需要引用，保持簡單直白').split('|'), 1):
+    parts = raw.split(':')
+    if len(parts) == 3:
+        QUOTE_OPTIONS[str(i)] = {'value': parts[0], 'label': parts[1], 'dify': parts[2]}
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
     print("錯誤: 缺少必要的環境變數設定。請檢查 Zeabur 的 Variables 設定。")
@@ -31,7 +55,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # 對話記錄
     c.execute('''
         CREATE TABLE IF NOT EXISTS user_conversations (
             line_user_id TEXT PRIMARY KEY,
@@ -41,16 +64,15 @@ def init_db():
         )
     ''')
 
-    # 用戶資料（基本資訊 + 教練偏好）
     c.execute('''
         CREATE TABLE IF NOT EXISTS user_profiles (
             line_user_id TEXT PRIMARY KEY,
             display_name TEXT,
-            coach_tone TEXT DEFAULT 'balanced',       -- strict / gentle / balanced
-            coach_style TEXT DEFAULT 'exploratory',   -- direct / exploratory
-            quote_freq TEXT DEFAULT 'sometimes',      -- often / sometimes / never
-            onboarding_done INTEGER DEFAULT 0,        -- 0=未完成問卷, 1=已完成
-            onboarding_step INTEGER DEFAULT 0,        -- 問卷進度
+            coach_tone TEXT DEFAULT 'balanced',
+            coach_style TEXT DEFAULT 'exploratory',
+            quote_freq TEXT DEFAULT 'sometimes',
+            onboarding_done INTEGER DEFAULT 0,
+            onboarding_step INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -115,7 +137,6 @@ def get_profile(line_user_id: str) -> dict:
 def save_profile(line_user_id: str, **kwargs):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # 確保 row 存在
     c.execute('INSERT OR IGNORE INTO user_profiles (line_user_id) VALUES (?)', (line_user_id,))
     for k, v in kwargs.items():
         c.execute(f'UPDATE user_profiles SET {k} = ?, updated_at = CURRENT_TIMESTAMP WHERE line_user_id = ?', (v, line_user_id))
@@ -123,53 +144,61 @@ def save_profile(line_user_id: str, **kwargs):
     conn.close()
 
 # ============================
+# LINE 抓用戶暱稱
+# ============================
+
+def get_line_display_name(user_id: str) -> str:
+    """從 LINE API 抓用戶暱稱，失敗回傳空字串"""
+    try:
+        profile = line_bot_api.get_profile(user_id)
+        return profile.display_name or ''
+    except Exception as e:
+        print(f"[LINE] 無法取得暱稱: {e}")
+        return ''
+
+# ============================
+# LINE Loading Animation
+# ============================
+
+def send_loading_animation(user_id: str, seconds: int = 20):
+    """呼叫 LINE loading animation API，讓對話框出現三個彩色點"""
+    try:
+        requests.post(
+            'https://api.line.me/v2/bot/chat/loading/start',
+            headers={
+                'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}',
+                'Content-Type': 'application/json'
+            },
+            json={'chatId': user_id, 'loadingSeconds': seconds},
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[LINE Loading] 失敗: {e}")
+
+# ============================
 # 問卷 Onboarding
 # ============================
 
-ONBOARDING_STEPS = [
-    {
-        "field": "display_name",
-        "question": (
-            "👋 嗨！我是你的 AI 生活教練。\n\n"
-            "在開始之前，我想先多了解你一點！\n\n"
-            "❶ 你怎麼稱呼你自己呢？（輸入你的名字或暱稱就好）"
-        ),
-    },
-    {
-        "field": "coach_tone",
-        "question": (
-            "很高興認識你！🙌\n\n"
-            "❷ 你喜歡什麼樣的教練語氣？\n\n"
-            "請輸入數字：\n"
-            "1️⃣ 嚴格督促型（推你一把，不留情面）\n"
-            "2️⃣ 溫柔支持型（像朋友一樣陪伴你）\n"
-            "3️⃣ 平衡理性型（視情況調整）"
-        ),
-        "choices": {"1": "strict", "2": "gentle", "3": "balanced"},
-    },
-    {
-        "field": "coach_style",
-        "question": (
-            "❸ 你習慣哪種溝通方式？\n\n"
-            "請輸入數字：\n"
-            "1️⃣ 直接說重點（我要答案，不要繞彎子）\n"
-            "2️⃣ 循循善誘（陪我慢慢想清楚）"
-        ),
-        "choices": {"1": "direct", "2": "exploratory"},
-    },
-    {
-        "field": "quote_freq",
-        "question": (
-            "❹ 最後一個問題！\n\n"
-            "你喜歡我在對話中引用名言、學術理論或研究嗎？\n\n"
-            "請輸入數字：\n"
-            "1️⃣ 多一點，我喜歡有根據的東西\n"
-            "2️⃣ 偶爾就好，不要太多\n"
-            "3️⃣ 不用，我比較喜歡簡單直白"
-        ),
-        "choices": {"1": "often", "2": "sometimes", "3": "never"},
-    },
-]
+def _build_tone_question():
+    lines = ["❷ 你喜歡什麼樣的教練語氣？\n\n請輸入數字："]
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    for i, (k, v) in enumerate(TONE_OPTIONS.items()):
+        lines.append(f"{emojis[i]} {v['label']}")
+    return "\n".join(lines)
+
+def _build_style_question():
+    lines = ["❸ 你習慣哪種溝通方式？\n\n請輸入數字："]
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    for i, (k, v) in enumerate(STYLE_OPTIONS.items()):
+        lines.append(f"{emojis[i]} {v['label']}")
+    return "\n".join(lines)
+
+def _build_quote_question():
+    lines = ["❹ 最後一個問題！\n\n你喜歡我在對話中引用名言、學術理論或研究嗎？\n\n請輸入數字："]
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    for i, (k, v) in enumerate(QUOTE_OPTIONS.items()):
+        lines.append(f"{emojis[i]} {v['label']}")
+    return "\n".join(lines)
 
 def handle_onboarding(line_user_id: str, text: str, profile: dict) -> str | None:
     """
@@ -181,67 +210,92 @@ def handle_onboarding(line_user_id: str, text: str, profile: dict) -> str | None
 
     step = profile['onboarding_step']
 
-    # 第一步：還沒開始，送出第一個問題
+    # 第一步：還沒開始，先抓 LINE 暱稱，直接跳到語氣問題
     if step == 0:
-        save_profile(line_user_id, onboarding_step=1)
-        return ONBOARDING_STEPS[0]['question']
+        line_name = get_line_display_name(line_user_id)
+        if line_name:
+            save_profile(line_user_id, display_name=line_name, onboarding_step=2)
+            return (
+                f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水。\n\n"
+                f"在開始之前，想先了解你喜歡什麼樣的教練風格！\n\n"
+                + _build_tone_question()
+            )
+        else:
+            # 抓不到暱稱，才問名字
+            save_profile(line_user_id, onboarding_step=1)
+            return (
+                "👋 嗨！我是你的 AI 生活教練 澄若水。\n\n"
+                "在開始之前，我想先多了解你一點！\n\n"
+                "❶ 你怎麼稱呼你自己呢？（輸入你的名字或暱稱就好）"
+            )
 
-    # 處理回答
-    current_step = ONBOARDING_STEPS[step - 1]
-    field = current_step['field']
-
-    if 'choices' in current_step:
-        answer = current_step['choices'].get(text.strip())
-        if not answer:
-            # 輸入不合法，重問
-            valid = '、'.join(current_step['choices'].keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + current_step['question']
-    else:
-        # 自由輸入（名字）
+    # Step 1：手動輸入名字（只有抓不到暱稱才會到這裡）
+    if step == 1:
         answer = text.strip()
         if not answer:
             return "名字不能是空的喔！請輸入你的名字或暱稱 😊"
+        save_profile(line_user_id, display_name=answer, onboarding_step=2)
+        return "很高興認識你！🙌\n\n" + _build_tone_question()
 
-    save_profile(line_user_id, **{field: answer, 'onboarding_step': step + 1})
+    # Step 2：語氣選擇
+    if step == 2:
+        opt = TONE_OPTIONS.get(text.strip())
+        if not opt:
+            valid = '、'.join(TONE_OPTIONS.keys())
+            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _build_tone_question()
+        save_profile(line_user_id, coach_tone=opt['value'], onboarding_step=3)
+        return _build_style_question()
 
-    # 還有下一步？
-    if step < len(ONBOARDING_STEPS):
-        return ONBOARDING_STEPS[step]['question']
+    # Step 3：溝通方式
+    if step == 3:
+        opt = STYLE_OPTIONS.get(text.strip())
+        if not opt:
+            valid = '、'.join(STYLE_OPTIONS.keys())
+            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _build_style_question()
+        save_profile(line_user_id, coach_style=opt['value'], onboarding_step=4)
+        return _build_quote_question()
 
-    # 全部完成！
-    save_profile(line_user_id, onboarding_done=1)
-    profile_updated = get_profile(line_user_id)
-    name = profile_updated['display_name'] or '你'
+    # Step 4：引用頻率
+    if step == 4:
+        opt = QUOTE_OPTIONS.get(text.strip())
+        if not opt:
+            valid = '、'.join(QUOTE_OPTIONS.keys())
+            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _build_quote_question()
+        save_profile(line_user_id, quote_freq=opt['value'], onboarding_done=1, onboarding_step=5)
 
-    tone_label = {"strict": "嚴格督促", "gentle": "溫柔支持", "balanced": "平衡理性"}.get(profile_updated['coach_tone'], '')
-    style_label = {"direct": "直接說重點", "exploratory": "循循善誘"}.get(profile_updated['coach_style'], '')
-    quote_label = {"often": "常常引用", "sometimes": "偶爾引用", "never": "不引用"}.get(profile_updated['quote_freq'], '')
+        profile_updated = get_profile(line_user_id)
+        name = profile_updated['display_name'] or '你'
+        tone_label = TONE_OPTIONS.get(next((k for k, v in TONE_OPTIONS.items() if v['value'] == profile_updated['coach_tone']), ''), {}).get('label', '')
+        style_label = STYLE_OPTIONS.get(next((k for k, v in STYLE_OPTIONS.items() if v['value'] == profile_updated['coach_style']), ''), {}).get('label', '')
+        quote_label = QUOTE_OPTIONS.get(next((k for k, v in QUOTE_OPTIONS.items() if v['value'] == profile_updated['quote_freq']), ''), {}).get('label', '')
 
-    return (
-        f"太棒了，{name}！✨ 設定完成！\n\n"
-        f"📋 你的教練風格：\n"
-        f"• 語氣：{tone_label}\n"
-        f"• 溝通方式：{style_label}\n"
-        f"• 引用頻率：{quote_label}\n\n"
-        f"從現在開始，我就是你的專屬教練了 💪\n"
-        f"有什麼想聊的，直接說吧！\n\n"
-        f"（隨時可以用 /setting 重新調整教練風格）"
-    )
+        return (
+            f"太棒了，{name}！✨ 設定完成！\n\n"
+            f"📋 你的教練風格：\n"
+            f"• 語氣：{tone_label}\n"
+            f"• 溝通方式：{style_label}\n"
+            f"• 引用頻率：{quote_label}\n\n"
+            f"從現在開始，我就是你的專屬教練了 💪\n"
+            f"有什麼想聊的，直接說吧！\n\n"
+            f"（隨時可以用 /setting 重新調整教練風格）"
+        )
+
+    return None
 
 # ============================
 # Dify inputs 組裝
 # ============================
 
 def build_dify_inputs(profile: dict) -> dict:
-    tone_map = {"strict": "嚴格督促", "gentle": "溫柔支持", "balanced": "平衡理性"}
-    style_map = {"direct": "直接說重點", "exploratory": "循循善誘、引導探索"}
-    quote_map = {"often": "頻繁引用名言、學術理論或研究數據來增加說服力", "sometimes": "偶爾適時引用即可", "never": "不需要引用，保持簡單直白"}
+    tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
+    style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
+    quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '偶爾適時引用即可')
 
     return {
         "user_name": profile.get('display_name') or '用戶',
-        "coach_tone": tone_map.get(profile.get('coach_tone', 'balanced'), '平衡理性'),
-        "coach_style": style_map.get(profile.get('coach_style', 'exploratory'), '循循善誘'),
-        "quote_freq": quote_map.get(profile.get('quote_freq', 'sometimes'), '偶爾適時引用即可'),
+        "coach_tone": tone_dify,
+        "coach_style": style_dify,
+        "quote_freq": quote_dify,
     }
 
 # ============================
@@ -271,7 +325,6 @@ def ask_dify(user_id: str, text: str, profile: dict) -> str:
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
-    # 主要 API
     try:
         result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
         new_conv_id = result.get('conversation_id')
@@ -282,16 +335,14 @@ def ask_dify(user_id: str, text: str, profile: dict) -> str:
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
-        # 嘗試備援
         if DIFY_API_KEY_FALLBACK:
             try:
                 print(f"[Dify Fallback] 啟動備援 | user={user_id}")
-                result = call_dify(DIFY_API_KEY_FALLBACK, user_id, text, None, inputs)  # 備援不帶 conversation_id（不同 app）
+                result = call_dify(DIFY_API_KEY_FALLBACK, user_id, text, None, inputs)
                 answer = result.get('answer', '').strip()
                 return ("⚡️ 我暫時切換到備用系統回答你：\n\n" + answer) if answer else "備援系統也沒回應，請稍後再試！"
             except Exception as fe:
                 print(f"[Dify Fallback] 失敗: {fe}")
-
         return (
             "☕ 我剛剛去泡了杯茶回來，結果忘記你問什麼了...\n\n"
             "請稍等一下再試試看！如果一直這樣，可以聯絡開發者 Chris 幫你看看哦 🙏"
@@ -341,15 +392,14 @@ def handle_command(user_id: str, text: str, profile: dict) -> str | None:
         return HELP_TEXT
 
     if cmd == '/setting':
-        # 重置問卷（保留名字），重新走教練偏好問卷
-        save_profile(user_id, onboarding_done=0, onboarding_step=2)  # 從語氣開始問
-        return ONBOARDING_STEPS[1]['question']
+        save_profile(user_id, onboarding_done=0, onboarding_step=2)
+        return "好的，我們來重新設定教練風格！\n\n" + _build_tone_question()
 
     if cmd == '/profile':
         name = profile.get('display_name') or '未設定'
-        tone_label = {"strict": "嚴格督促", "gentle": "溫柔支持", "balanced": "平衡理性"}.get(profile.get('coach_tone', ''), '未設定')
-        style_label = {"direct": "直接說重點", "exploratory": "循循善誘"}.get(profile.get('coach_style', ''), '未設定')
-        quote_label = {"often": "常常引用", "sometimes": "偶爾引用", "never": "不引用"}.get(profile.get('quote_freq', ''), '未設定')
+        tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '未設定')
+        style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '未設定')
+        quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '未設定')
         return (
             f"📋 你的教練設定：\n\n"
             f"👤 名字：{name}\n"
@@ -393,8 +443,9 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
         return
 
-    # 3. 正常 AI 對話
-    profile = get_profile(user_id)  # 重新讀取（可能剛被 onboarding 更新）
+    # 3. 正常 AI 對話：先送 loading animation，再等 Dify 回應
+    send_loading_animation(user_id, seconds=20)
+    profile = get_profile(user_id)
     ai_response = ask_dify(user_id, user_text, profile)
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_response))
 
