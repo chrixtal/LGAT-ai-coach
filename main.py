@@ -21,6 +21,10 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_SYNC_URL = f'https://app-ffa38ee7.base44.app/functions/syncUser'
+BASE44_SAVE_URL = f'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+BASE44_TOKEN = os.environ.get('BASE44_API_KEY', '')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
 
 # ============================
 # 教練設定（從環境變數讀取）
@@ -185,6 +189,30 @@ def send_loading_animation(user_id, seconds=20):
 
 BASE44_SYNC_USER_URL = 'https://app-ffa38ee7.base44.app/functions/syncUser'
 BASE44_SAVE_GOAL_URL = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+
+
+def sync_to_base44(user_id, profile):
+    """非同步同步用戶資料到 Base44 資料庫"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {BASE44_TOKEN}' if BASE44_TOKEN else ''
+        }
+        resp = requests.post(BASE44_SYNC_URL, json=payload, headers=headers, timeout=5)
+        if resp.status_code != 200:
+            print(f"[Base44 Sync] 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
 
 def sync_user_to_base44(user_id, display_name, profile):
     """同步用戶資料到 Base44"""
@@ -618,6 +646,13 @@ def handle_message(event):
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
 
     threading.Thread(target=process_and_push, daemon=True).start()
+    
+    # 非同步同步資料到 Base44
+    def sync_in_bg():
+        p = get_profile(user_id)
+        sync_to_base44(user_id, p)
+    
+    threading.Thread(target=sync_in_bg, daemon=True).start()
 
 # ============================
 # 健康檢查
