@@ -9,6 +9,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+from sync_integration import sync_user_to_base44, save_goal_to_base44, save_event_to_base44, detect_goal_or_event
 
 app = FastAPI()
 
@@ -406,6 +407,36 @@ def sync_user_and_detect(user_id: str, text: str, profile: dict):
     except Exception as e:
         print(f"[detect] 偵測失敗: {e}")
 
+def ask_dify_with_sync(user_id, text, profile):
+    """呼叫 Dify，並自動同步用戶資料、偵測目標/事件"""
+    # 背景同步用戶資料到 Base44
+    threading.Thread(
+        target=sync_user_to_base44,
+        args=(
+            user_id,
+            profile.get('display_name', ''),
+            profile.get('coach_tone', 'balanced'),
+            profile.get('coach_style', 'exploratory'),
+            profile.get('quote_freq', 'sometimes'),
+            profile.get('total_messages', 0) + 1,
+            profile.get('reminder_enabled', False),
+            profile.get('reminder_time', '08:00'),
+        ),
+        daemon=True
+    ).start()
+
+    # 偵測目標或事件
+    detected = detect_goal_or_event(text)
+    if detected:
+        dtype, entity_type, title, info = detected
+        if dtype == 'goal':
+            save_goal_to_base44(user_id, profile.get('display_name', ''), title, goal_type=entity_type)
+        elif dtype == 'event':
+            save_event_to_base44(user_id, profile.get('display_name', ''), title, event_type=entity_type)
+
+    # 呼叫原本的 Dify
+    return ask_dify(user_id, text, profile)
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -597,7 +628,7 @@ def handle_message(event):
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
-        ai_response = ask_dify(user_id, user_text, current_profile)
+        ai_response = ask_dify_with_sync(user_id, user_text, current_profile)
         
         # 背景偵測並儲存目標/事件
         try:
