@@ -48,6 +48,81 @@ QUOTE_OPTIONS = _parse_options(os.environ.get(
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
     print("錯誤: 缺少必要的環境變數設定。")
 
+
+# ============================
+# Base44 API 呼叫（同步用戶、儲存目標/事件）
+# ============================
+
+def call_backend_function(func_name, payload):
+    """呼叫 Base44 backend function，回傳 response json 或 None（失敗時）"""
+    try:
+        url = f"{BASE44_API_URL}/functions/{func_name}"
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Base44] {func_name} 失敗: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 例外: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 LgatUser"""
+    return call_backend_function('syncUser', {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', 'balanced'),
+        'coach_style': profile.get('coach_style', 'exploratory'),
+        'quote_freq': profile.get('quote_freq', 'sometimes'),
+        'total_messages': profile.get('total_messages', 0),
+        'reminder_enabled': profile.get('reminder_enabled', False),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+    })
+
+def save_goal_to_base44(line_user_id, display_name, title, description='', goal_type='short', target_date=''):
+    """儲存目標到 Base44 LgatGoal"""
+    return call_backend_function('saveGoalOrEvent', {
+        'entity_type': 'goal',
+        'line_user_id': line_user_id,
+        'display_name': display_name,
+        'title': title,
+        'description': description,
+        'type': goal_type,
+        'target_date': target_date,
+    })
+
+def save_event_to_base44(line_user_id, display_name, title, event_type='todo', due_date='', recurrence='none', note=''):
+    """儲存事件到 Base44 LgatEvent"""
+    return call_backend_function('saveGoalOrEvent', {
+        'entity_type': 'event',
+        'line_user_id': line_user_id,
+        'display_name': display_name,
+        'title': title,
+        'type': event_type,
+        'due_date': due_date,
+        'recurrence': recurrence,
+        'note': note,
+    })
+
+def detect_goal_in_text(text):
+    """簡單的關鍵字偵測，判斷用戶是否在說目標"""
+    keywords_goal = ['目標', '想要', '希望', '計畫', '打算', '達成', '完成', '學習', '目的']
+    keywords_habit = ['習慣', '每天', '每週', '每日', '養成', '堅持', '打卡']
+    keywords_todo = ['要做', '待辦', '提醒', '記得', '別忘記']
+    
+    text_lower = text.lower()
+    for kw in keywords_goal:
+        if kw in text:
+            return ('goal', text)
+    for kw in keywords_habit:
+        if kw in text:
+            return ('habit', text)
+    for kw in keywords_todo:
+        if kw in text:
+            return ('todo', text)
+    return (None, None)
+
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
@@ -610,23 +685,19 @@ def handle_message(event):
         save_profile(user_id, total_messages=new_total)
 
         # 同步用戶資料到 Base44
-        sync_user_to_base44(
-            user_id,
-            profile.get('display_name', ''),
-            profile.get('coach_tone', ''),
-            profile.get('coach_style', ''),
-            profile.get('quote_freq', ''),
-            new_total
-        )
+        sync_user_to_base44(user_id, {**profile, 'total_messages': new_total})
 
         # 偵測目標和事件，自動儲存
-        if detect_goal_in_text(user_text):
+        entity_type, _ = detect_goal_in_text(user_text)
+        if entity_type == 'goal':
             goal_title = user_text[:30] if len(user_text) > 30 else user_text
             save_goal_to_base44(user_id, profile.get('display_name', ''), goal_title)
-
-        if detect_event_in_text(user_text):
+        elif entity_type == 'habit':
             event_title = user_text[:30] if len(user_text) > 30 else user_text
-            save_event_to_base44(user_id, profile.get('display_name', ''), event_title)
+            save_event_to_base44(user_id, profile.get('display_name', ''), event_title, event_type='habit')
+        elif entity_type == 'todo':
+            event_title = user_text[:30] if len(user_text) > 30 else user_text
+            save_event_to_base44(user_id, profile.get('display_name', ''), event_title, event_type='todo')
 
         # Loading animation
         send_loading_animation(user_id, seconds=60)
