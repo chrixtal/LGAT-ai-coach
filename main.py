@@ -410,6 +410,54 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 目標/事件偵測與儲存
+# ============================
+
+def try_parse_and_save(user_id, user_text, ai_response, profile):
+    """嘗試從 AI 回應中解析 JSON 標記，自動儲存目標/事件"""
+    import json
+    import re
+    
+    # 尋找 {{GOAL: ...}} 或 {{EVENT: ...}} 標記
+    goal_matches = re.findall(r'{{GOAL:\s*({.*?})\s*}}', ai_response)
+    event_matches = re.findall(r'{{EVENT:\s*({.*?})\s*}}', ai_response)
+    
+    for match in goal_matches:
+        try:
+            data = json.loads(match)
+            call_backend_function('saveGoalOrEvent', {
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'title': data.get('title', '未命名目標'),
+                'description': data.get('description', ''),
+                'type': data.get('type', 'short'),
+                'target_date': data.get('target_date', ''),
+            })
+            print(f"[Goal Saved] {data.get('title')} | user={user_id}")
+        except Exception as e:
+            print(f"[Goal Parse Error] {e}")
+    
+    for match in event_matches:
+        try:
+            data = json.loads(match)
+            call_backend_function('saveGoalOrEvent', {
+                'entity_type': 'event',
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'title': data.get('title', '未命名事件'),
+                'type': data.get('type', 'todo'),
+                'due_date': data.get('due_date', ''),
+                'recurrence': data.get('recurrence', 'none'),
+                'note': data.get('note', ''),
+            })
+            print(f"[Event Saved] {data.get('title')} | user={user_id}")
+        except Exception as e:
+            print(f"[Event Parse Error] {e}")
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
