@@ -443,9 +443,8 @@ def parse_and_save_goal_or_event(line_user_id, display_name, ai_response):
     except Exception as e:
         print(f"[Base44] 解析標記失敗: {e}")
 
-def _parse_and_save_entities(user_id, answer):
+def _parse_and_save_entities(user_id, answer, profile):
     """偵測回應中的 [GOAL] 和 [EVENT] 標記，自動儲存"""
-    # 格式: [GOAL]title=...;type=short;target_date=...;description=...[/GOAL]
     goal_pattern = r'\[GOAL\](.*?)\[/GOAL\]'
     event_pattern = r'\[EVENT\](.*?)\[/EVENT\]'
     
@@ -456,7 +455,14 @@ def _parse_and_save_entities(user_id, answer):
                 k, v = pair.split('=', 1)
                 fields[k.strip()] = v.strip()
         if 'title' in fields:
-            save_goal_or_event(user_id, 'goal', fields)
+            save_goal_or_event(
+                user_id,
+                'goal',
+                title=fields.get('title', ''),
+                description=fields.get('description', ''),
+                goal_type=fields.get('type', 'short'),
+                target_date=fields.get('target_date', '')
+            )
     
     for match in re.finditer(event_pattern, answer):
         fields = {}
@@ -465,7 +471,16 @@ def _parse_and_save_entities(user_id, answer):
                 k, v = pair.split('=', 1)
                 fields[k.strip()] = v.strip()
         if 'title' in fields:
-            save_goal_or_event(user_id, 'event', fields)
+            save_goal_or_event(
+                user_id,
+                'event',
+                title=fields.get('title', ''),
+                description=fields.get('description', ''),
+                event_type=fields.get('type', 'todo'),
+                recurrence=fields.get('recurrence', 'none'),
+                target_date=fields.get('due_date', '')
+            )
+
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
@@ -484,7 +499,13 @@ def ask_dify(user_id, text, profile):
             save_profile(user_id, total_messages=current_total + 1)
             
             # 偵測 [GOAL] 和 [EVENT] 標記，自動儲存
-            _parse_and_save_entities(user_id, answer)
+            _parse_and_save_entities(user_id, answer, profile)
+            
+            # 非同步同步用戶資料到 Base44（不阻擋回應）
+            threading.Thread(
+                target=lambda: sync_to_base44(user_id, profile, add_message_count=1),
+                daemon=True
+            ).start()
             
             return answer
         return "🤔 我想到一半忘記說什麼了，請再問我一次！"
