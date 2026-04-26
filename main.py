@@ -209,61 +209,6 @@ def call_backend(function_name, payload):
         print(f"[Backend] {function_name} 失敗: {e}")
         return None
 
-def sync_user_to_backend(user_id, display_name, profile):
-    """同步用戶資料到 Base44"""
-    payload = {
-        "line_user_id": user_id,
-        "display_name": display_name,
-        "coach_tone": profile.get('coach_tone', 'balanced'),
-        "coach_style": profile.get('coach_style', 'exploratory'),
-        "quote_freq": profile.get('quote_freq', 'sometimes'),
-        "total_messages": profile.get('total_messages', 0),
-        "plan": "free",
-    }
-    result = call_backend("syncUser", payload)
-    if result and result.get('ok'):
-        print(f"[Backend] syncUser 成功: {user_id}")
-    return result
-
-def detect_and_save_goal_or_event(user_id, display_name, ai_response, user_input):
-    """從用戶輸入和 AI 回應偵測目標/事件，並儲存到 Base44"""
-    combined_text = (user_input + " " + ai_response).lower()
-    
-    # 偵測目標（短期/中期/長期）
-    if any(kw in combined_text for kw in ['目標', '想要', '計畫', '目的', 'goal']):
-        goal_type = 'short'
-        if any(kw in combined_text for kw in ['中期', '3個月', '6個月', 'medium']):
-            goal_type = 'medium'
-        elif any(kw in combined_text for kw in ['長期', '年', 'long']):
-            goal_type = 'long'
-        
-        payload = {
-            "entity_type": "goal",
-            "line_user_id": user_id,
-            "display_name": display_name,
-            "title": user_input[:40] if len(user_input) <= 40 else user_input[:37] + "...",
-            "type": goal_type,
-        }
-        call_backend("saveGoalOrEvent", payload)
-        print(f"[Backend] 自動儲存目標（{goal_type}）")
-
-    # 偵測習慣
-    if any(kw in combined_text for kw in ['習慣', '每天', '每週', '打卡', 'habit', 'daily']):
-        payload = {
-            "entity_type": "event",
-            "line_user_id": user_id,
-            "display_name": display_name,
-            "title": user_input[:40] if len(user_input) <= 40 else user_input[:37] + "...",
-            "type": "habit",
-            "recurrence": "daily",
-        }
-        call_backend("saveGoalOrEvent", payload)
-        print(f"[Backend] 自動儲存習慣")
-
-# ============================
-# 問卷 Onboarding
-# ============================
-
 def _build_options_text(options):
     emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣']
     return '\n'.join(f"{emojis[i]} {v['label']}" for i, v in enumerate(options.values()))
@@ -475,6 +420,7 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        # 這裡不要改 answer，parse 會在 handle_message 裡做
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -624,14 +570,22 @@ def handle_message(event):
             save_profile(user_id, total_messages=msg_count)
             current_profile['total_messages'] = msg_count
             
-            # 同步用戶資料到 Base44
+            # 清理回應中的特殊標記（目標/事件）
+            cleaned_response = parse_dify_response(ai_response, user_id, current_profile.get('display_name', ''))
+            
+            # 同步用戶資料到 Base44（背景執行）
             user_name = current_profile.get('display_name') or get_line_display_name(user_id) or '用戶'
-            sync_user_to_backend(user_id, user_name, current_profile)
+            def bg_sync():
+                sync_user_to_base44(
+                    user_id, user_name,
+                    current_profile.get('coach_tone', ''),
+                    current_profile.get('coach_style', ''),
+                    current_profile.get('quote_freq', ''),
+                    msg_count
+                )
+            threading.Thread(target=bg_sync, daemon=True).start()
             
-            # 偵測並儲存目標/事件
-            detect_and_save_goal_or_event(user_id, user_name, ai_response, user_text)
-            
-            line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+            line_bot_api.push_message(user_id, TextSendMessage(text=cleaned_response))
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
