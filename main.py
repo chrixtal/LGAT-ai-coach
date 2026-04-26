@@ -16,8 +16,7 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
-BASE44_API_KEY = os.environ.get('BASE44_API_KEY', '')
-BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_APP_URL = 'https://app-ffa38ee7.base44.app'
 
 def _parse_options(env_val):
     result = {}
@@ -177,47 +176,43 @@ def send_loading_animation(user_id, seconds=20):
 # ============================
 
 def sync_user_to_base44(user_id, profile):
-    """呼叫 Base44 syncUser API，同步用戶資料"""
-    if not BASE44_API_KEY:
-        return
+    """呼叫 Base44 syncUser API，同步用戶資料到管理後台"""
     try:
         payload = {
             "line_user_id": user_id,
             "display_name": profile.get('display_name', ''),
-            "coach_tone": profile.get('coach_tone', ''),
-            "coach_style": profile.get('coach_style', ''),
-            "quote_freq": profile.get('quote_freq', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
             "total_messages": profile.get('total_messages', 0),
-            "plan": "free",  # 預設免費版，管理後台可升級
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
         }
         resp = requests.post(
             f"{BASE44_APP_URL}/functions/syncUser",
-            headers={"Authorization": f"Bearer {BASE44_API_KEY}"},
             json=payload,
             timeout=5
         )
         if resp.ok:
-            print(f"[Base44] 用戶 {user_id} 已同步")
+            print(f"[Base44 Sync] ✅ user={user_id}")
         else:
-            print(f"[Base44] 同步失敗: {resp.status_code}")
+            print(f"[Base44 Sync] ❌ {resp.status_code}")
     except Exception as e:
-        print(f"[Base44] 同步錯誤: {e}")
+        print(f"[Base44 Sync] 錯誤: {e}")
 
 def detect_and_save_goal(user_id, text, profile):
-    """簡單偵測目標關鍵字並嘗試存到 Base44"""
-    if not BASE44_API_KEY:
-        return
+    """偵測目標關鍵字並存到 Base44"""
     try:
         keywords = ['目標', '想要', '要達成', '希望', '計畫', '夢想', '願景']
         if any(kw in text for kw in keywords):
+            print(f"[Goal Detection] 偵測到目標關鍵字: {text[:30]}")
             requests.post(
                 f"{BASE44_APP_URL}/functions/saveGoalOrEvent",
-                headers={"Authorization": f"Bearer {BASE44_API_KEY}"},
                 json={
                     "entity_type": "goal",
                     "line_user_id": user_id,
                     "display_name": profile.get('display_name', ''),
-                    "title": text[:50],
+                    "title": text[:100],
                     "type": "short",
                 },
                 timeout=5
