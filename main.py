@@ -473,7 +473,10 @@ def handle_message(event):
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
-        # 同步用戶資料到 Base44
+        # 更新本地 total_messages 並同步到 Base44
+        new_total = (current_profile.get('total_messages') or 0) + 1
+        save_profile(user_id, total_messages=new_total)
+        current_profile['total_messages'] = new_total
         sync_user_to_base44(user_id, current_profile)
         if not replied_flag.is_set():
             replied_flag.set()
