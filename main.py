@@ -18,6 +18,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
+BASE44_APP_URL = "https://app-ffa38ee7.base44.app"
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_APP_URL = 'https://app-ffa38ee7.base44.app'
 
@@ -330,6 +331,57 @@ def build_dify_inputs(profile):
         "coach_style": style_dify,
         "quote_freq": quote_dify,
     }
+
+# ============================
+# Base44 API 呼叫（用戶同步、目標儲存）
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """把用戶資料同步到 Base44 後台資料庫"""
+    url = "https://app-ffa38ee7.base44.app/functions/syncUser"
+    
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": profile.get('display_name') or '',
+        "coach_tone": profile.get('coach_tone') or 'balanced',
+        "coach_style": profile.get('coach_style') or 'exploratory',
+        "quote_freq": profile.get('quote_freq') or 'sometimes',
+        "total_messages": profile.get('total_messages') or 0,
+        "reminder_enabled": profile.get('reminder_enabled') or False,
+        "reminder_time": profile.get('reminder_time') or '08:00',
+        "plan": profile.get('plan') or 'free',
+    }
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.ok:
+            print(f"[Base44] syncUser OK for {line_user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, entity_type, **fields):
+    """把目標或事件儲存到 Base44"""
+    url = "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent"
+    
+    payload = {
+        "line_user_id": line_user_id,
+        "entity_type": entity_type,
+        **fields
+    }
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.ok:
+            result = resp.json()
+            print(f"[Base44] saved {entity_type} OK")
+            return result
+        else:
+            print(f"[Base44] save failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] save error: {e}")
+    return None
 
 # ============================
 # Dify API 呼叫
