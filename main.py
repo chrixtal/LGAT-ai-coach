@@ -309,7 +309,7 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     }
     if conversation_id:
         data["conversation_id"] = conversation_id
-    response = requests.post(url, headers=headers, json=data, timeout=60)
+    response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
 
@@ -438,13 +438,22 @@ def handle_message(event):
         return
 
     # 3. 正常 AI 對話
-    # 先送 loading animation（三個彩色點），再用背景執行緒跑 Dify，完成後用 push_message 回應
-    # 用 push_message 而非 reply_message 是因為 reply token 有時效，背景執行需要 push
+    # loading animation 先出現，背景執行緒跑 Dify，完成後 push_message
+    # replied_flag 確保只送一次回應，避免 timeout 錯誤訊息 + 正確回應重疊
+    replied_flag = threading.Event()
+
     def process_and_push():
+        # 先送 loading animation（最多 60 秒）
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
-        ai_response = ask_dify(user_id, user_text, current_profile)
-        line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+        try:
+            ai_response = ask_dify(user_id, user_text, current_profile)
+        except Exception as e:
+            print(f"[handle_message] 未預期錯誤: {e}")
+            ai_response = "😵 出了點小問題，請再試一次！"
+        if not replied_flag.is_set():
+            replied_flag.set()
+            line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
