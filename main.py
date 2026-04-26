@@ -498,6 +498,71 @@ async def callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return 'OK'
 
+
+# ============================
+# Base44 API 整合
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+def sync_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 LgatUser"""
+    try:
+        resp = requests.post(f'{BASE44_API_URL}/syncUser', json={
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0) + 1,
+        }, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 同步成功 | user={user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def detect_and_save_goal_or_event(user_id, text, display_name):
+    """偵測目標/事件關鍵詞，自動儲存到 Base44"""
+    text_lower = text.lower()
+    
+    # 目標偵測：「想要」、「計畫」、「目標」、「想成為」等
+    goal_keywords = ['想要', '計畫', '目標', '想成為', '我要', '想達成', '希望能', '決定要']
+    is_goal = any(kw in text_lower for kw in goal_keywords)
+    
+    if is_goal and len(text) > 5:
+        try:
+            resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json={
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': text[:50],  # 前 50 字當標題
+                'type': 'short',  # 預設短期
+            }, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] 目標已儲存 | user={user_id}")
+        except Exception as e:
+            print(f"[Base44] 目標儲存失敗: {e}")
+    
+    # 事件偵測：「習慣」、「待辦」、「提醒」等
+    event_keywords = ['習慣', '待辦', '提醒', '要做', '明天', '今天', '每天', '每週', '打卡']
+    is_event = any(kw in text_lower for kw in event_keywords)
+    
+    if is_event and len(text) > 5:
+        try:
+            resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json={
+                'entity_type': 'event',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': text[:50],
+                'type': 'todo',
+            }, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] 事件已儲存 | user={user_id}")
+        except Exception as e:
+            print(f"[Base44] 事件儲存失敗: {e}")
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
