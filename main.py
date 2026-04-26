@@ -298,6 +298,47 @@ def detect_and_save_goals_events(text, line_user_id, display_name):
             print(f"[Event] 自動記錄: 習慣完成")
             break
 
+
+# ============================
+# 目標/事件自動偵測
+# ============================
+
+def detect_and_save_goals_events(user_id, text, profile):
+    """從用戶訊息偵測是否提到目標或事件，自動儲存"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '要達成', '目標是', '我要', '計畫', '打算', '想學', '想做']
+    
+    # 事件關鍵詞
+    event_keywords = ['待辦', '要做', '今天要', '明天要', '這週要', '習慣', '任務']
+    
+    # 簡單啟發式：檢查是否有關鍵詞
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+    
+    if not (is_goal or is_event):
+        return
+    
+    # 嘗試從訊息提取標題（簡易版：取前 20 個字）
+    title = text[:30] if len(text) > 0 else "未命名"
+    
+    if is_goal:
+        goal_type = "short"  # 預設短期，可從內容進一步推斷
+        if '長期' in text or '明年' in text:
+            goal_type = "long"
+        elif '季' in text or '三個月' in text or '半年' in text:
+            goal_type = "medium"
+        
+        save_goal_to_base44(user_id, title, goal_type)
+    
+    if is_event:
+        event_type = "todo"  # 預設待辦
+        if '習慣' in text:
+            event_type = "habit"
+        
+        save_event_to_base44(user_id, title, event_type)
+
 # ============================
 # LINE helpers
 # ============================
@@ -618,11 +659,20 @@ def handle_message(event):
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         fresh_profile = get_profile(user_id)
+        
+        # 1. 同步用戶資料到 Base44
+        message_count = fresh_profile.get('total_messages', 0) + 1
+        sync_user_to_base44(user_id, fresh_profile, message_count)
+        
         try:
             ai_response = ask_dify(user_id, user_text, fresh_profile)
+            
+            # 2. 嘗試偵測並儲存目標/事件（關鍵詞判斷）
+            detect_and_save_goals_events(user_id, user_text, fresh_profile)
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
+        
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
