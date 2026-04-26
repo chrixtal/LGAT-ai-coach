@@ -9,6 +9,30 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
 # ============================
+# Base44 Backend Functions API
+# ============================
+BASE44_API_URL = 'https://app-ffa38ee7.base44.app/functions'
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """異步呼叫 Base44 syncUser function"""
+    try:
+        requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=3
+        )
+    except Exception as e:
+        print(f"[Sync] error: {e}")
+
+
+# ============================
 # Base44 backend functions
 # ============================
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
