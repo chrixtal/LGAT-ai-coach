@@ -225,6 +225,90 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify AI
 # ============================
 
+# ============================
+# Base44 後台同步
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_SYNC_USER_URL = f'https://app-ffa38ee7.base44.app/functions/syncUser'
+BASE44_SAVE_GOAL_URL = f'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+
+def sync_user_to_base44(user_id: str, profile: dict):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            BASE44_SYNC_USER_URL,
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶同步成功: {user_id}")
+        else:
+            print(f"[Base44] 用戶同步失敗 ({resp.status_code}): {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def detect_and_save_goal(user_id: str, text: str, profile: dict, ai_response: str):
+    """
+    偵測用戶是否在設定目標、事件、或更新進度。
+    根據關鍵字自動存進 Base44。
+    """
+    keywords_goal = ['目標', '想要', '想完成', '計畫', '目的', '想達成', '要完成']
+    keywords_event = ['明天', '下禮拜', '每天', '每週', '習慣', '待辦', '要做']
+    keywords_progress = ['已經', '完成了', '做到了', '達成了', '已達成', '進度']
+
+    has_goal = any(kw in text for kw in keywords_goal)
+    has_event = any(kw in text for kw in keywords_event)
+    has_progress = any(kw in text for kw in keywords_progress)
+
+    # 簡單的提取邏輯（實際應該由 Dify 辅助）
+    if has_goal or (has_progress and '目標' in ai_response):
+        try:
+            resp = requests.post(
+                BASE44_SAVE_GOAL_URL,
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': text[:30],  # 簡化，取前 30 字
+                    'description': text,
+                    'type': 'short',  # 預設短期，後續可由 AI 決定
+                },
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                print(f"[Base44] 目標已儲存: {user_id}")
+        except Exception as e:
+            print(f"[Base44] 目標儲存失敗: {e}")
+
+    if has_event:
+        try:
+            resp = requests.post(
+                BASE44_SAVE_GOAL_URL,
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': text[:30],
+                    'type': 'todo',  # 簡化，預設待辦
+                },
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                print(f"[Base44] 事件已儲存: {user_id}")
+        except Exception as e:
+            print(f"[Base44] 事件儲存失敗: {e}")
+
+
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
@@ -254,6 +338,12 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     return response.json()
 
 def ask_dify(user_id, text, profile):
+    # 每次對話都同步用戶資料到 Base44
+    try:
+        sync_user_to_base44(user_id, profile)
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
