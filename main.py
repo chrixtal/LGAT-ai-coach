@@ -612,6 +612,55 @@ def parse_and_save_goal_or_event(line_user_id, display_name, ai_response):
         print(f"[Parse] 錯誤: {e}")
 
 
+
+# ============================
+# Base44 同步函數
+# ============================
+
+def sync_user_to_base44(user_id, profile, total_messages=None):
+    """將用戶資料同步到 Base44 後台"""
+    try:
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
+        data = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        if total_messages is not None:
+            data['total_messages'] = total_messages
+        
+        resp = requests.post(base44_url, json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser ok | user={user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def save_goal_or_event_to_base44(user_id, display_name, entity_type, **fields):
+    """將目標或事件儲存到 Base44"""
+    try:
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent')
+        data = {
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'entity_type': entity_type,
+            **fields,
+        }
+        resp = requests.post(base44_url, json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] save {entity_type} ok | user={user_id}")
+            return resp.json()
+        else:
+            print(f"[Base44] save {entity_type} failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] save {entity_type} error: {e}")
+    return None
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
