@@ -9,6 +9,9 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+
+# --- Base44 Backend Functions ---
+BASE44_API_BASE = "https://app-ffa38ee7.base44.app/functions"
 from sync_integration import sync_user_to_base44, save_goal_to_base44, save_event_to_base44, detect_goal_or_event
 
 app = FastAPI()
@@ -635,11 +638,50 @@ async def callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return 'OK'
 
+def sync_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        requests.post(
+            f"{BASE44_API_BASE}/syncUser",
+            json={
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name') or '',
+                "coach_tone": profile.get('coach_tone') or 'balanced',
+                "coach_style": profile.get('coach_style') or 'exploratory',
+                "quote_freq": profile.get('quote_freq') or 'sometimes',
+                "total_messages": profile.get('total_messages', 0) + 1,
+                "reminder_enabled": profile.get('reminder_enabled', False),
+                "reminder_time": profile.get('reminder_time') or '08:00',
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[syncUser] 同步失敗: {e}")
+
+def save_goal_or_event(user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        requests.post(
+            f"{BASE44_API_BASE}/saveGoalOrEvent",
+            json={
+                "entity_type": entity_type,
+                "line_user_id": user_id,
+                "display_name": display_name,
+                **fields
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 儲存失敗: {e}")
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 同步用戶資料到 Base44
+    sync_to_base44(user_id, profile)
 
     # 背景同步用戶資料到 Base44
     def sync_in_background():
