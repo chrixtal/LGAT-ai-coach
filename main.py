@@ -483,6 +483,54 @@ def ask_dify_with_sync(user_id, text, profile):
     # 呼叫原本的 Dify
     return ask_dify(user_id, text, profile)
 
+
+# ============================
+# Base44 Backend 整合
+# ============================
+
+def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[Base44 syncUser] ✅ {user_id}")
+        else:
+            print(f"[Base44 syncUser] ❌ {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        print(f"[Base44 syncUser] 錯誤: {e}")
+
+def save_goal_or_event(entity_type, user_id, display_name, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,
+                'line_user_id': user_id,
+                'display_name': display_name,
+                **fields
+            },
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[Base44 save{entity_type.title()}] ✅")
+        else:
+            print(f"[Base44 save{entity_type.title()}] ❌ {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 save{entity_type.title()}] 錯誤: {e}")
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
