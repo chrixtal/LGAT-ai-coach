@@ -338,6 +338,111 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 後台同步與目標/事件偵測
+# ============================
+
+def _sync_user(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[syncUser] {user_id} 已同步")
+        else:
+            print(f"[syncUser] 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 例外: {e}")
+
+def _extract_tags(text):
+    """從回應中提取 [GOAL] / [EVENT] tag"""
+    import re
+    goals = re.findall(r'\[GOAL\](.*?)\[/GOAL\]', text, re.DOTALL)
+    events = re.findall(r'\[EVENT\](.*?)\[/EVENT\]', text, re.DOTALL)
+    return goals, events
+
+def _parse_goal(goal_text):
+    """解析目標格式：title|description|type(short/medium/long)|target_date"""
+    parts = goal_text.strip().split('|')
+    return {
+        'title': parts[0].strip() if len(parts) > 0 else '',
+        'description': parts[1].strip() if len(parts) > 1 else '',
+        'type': parts[2].strip() if len(parts) > 2 else 'short',
+        'target_date': parts[3].strip() if len(parts) > 3 else '',
+    }
+
+def _parse_event(event_text):
+    """解析事件格式：title|type(habit/todo/milestone/reminder)|due_date|recurrence(none/daily/weekly/monthly)"""
+    parts = event_text.strip().split('|')
+    return {
+        'title': parts[0].strip() if len(parts) > 0 else '',
+        'type': parts[1].strip() if len(parts) > 1 else 'todo',
+        'due_date': parts[2].strip() if len(parts) > 2 else '',
+        'recurrence': parts[3].strip() if len(parts) > 3 else 'none',
+    }
+
+def _process_answer_tags(user_id, profile, answer):
+    """処理 answer 中的 tag，同步用戶和存儲目標/事件"""
+    try:
+        # 1. 同步用戶
+        total_msg = profile.get('total_messages', 0)
+        save_profile(user_id, total_messages=total_msg + 1)
+        _sync_user(user_id, {**profile, 'total_messages': total_msg + 1})
+
+        # 2. 提取 tag
+        goals, events = _extract_tags(answer)
+
+        # 3. 存目標
+        for goal_text in goals:
+            goal = _parse_goal(goal_text)
+            if goal['title']:
+                resp = requests.post(
+                    'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'goal',
+                        'line_user_id': user_id,
+                        'display_name': profile.get('display_name'),
+                        **goal,
+                    },
+                    timeout=5
+                )
+                if resp.ok:
+                    print(f"[Goal] {goal['title']} 已儲存")
+                else:
+                    print(f"[Goal] 存儲失敗: {resp.status_code}")
+
+        # 4. 存事件
+        for event_text in events:
+            event = _parse_event(event_text)
+            if event['title']:
+                resp = requests.post(
+                    'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'event',
+                        'line_user_id': user_id,
+                        'display_name': profile.get('display_name'),
+                        **event,
+                    },
+                    timeout=5
+                )
+                if resp.ok:
+                    print(f"[Event] {event['title']} 已儲存")
+                else:
+                    print(f"[Event] 存儲失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[_process_answer_tags] 例外: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -348,7 +453,12 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        
+        if answer:
+            # 在背景異步呼叫 syncUser + 處理 tag
+            threading.Thread(target=_process_answer_tags, args=(user_id, profile, answer), daemon=True).start()
+            return answer
+        return "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
