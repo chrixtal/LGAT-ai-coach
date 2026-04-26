@@ -577,6 +577,27 @@ def handle_message(event):
 # 健康檢查
 # ============================
 
+
+def sync_user_to_backend(user_id, profile):
+    """呼叫 Base44 backend 同步用戶資料"""
+    try:
+        url = "https://app-ffa38ee7.base44.app/functions/syncUser"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', ''),
+            "coach_style": profile.get('coach_style', ''),
+            "quote_freq": profile.get('quote_freq', ''),
+        }
+        resp = requests.post(url, headers=headers, json=data, timeout=5)
+        if resp.ok:
+            print(f"[Sync] 用戶 {user_id} 已同步到後台")
+        else:
+            print(f"[Sync] 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Sync] 錯誤: {e}")
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
