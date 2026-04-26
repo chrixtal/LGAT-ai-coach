@@ -17,6 +17,10 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 
+# Base44 backend functions
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-dd7dd6e1.base44.app')
+BASE44_SERVICE_TOKEN = os.environ.get('BASE44_SERVICE_TOKEN', '')
+
 # ============================
 # 教練設定（從環境變數讀取）
 # 格式：內部值:顯示名稱:Dify描述，用 | 分隔
@@ -147,6 +151,67 @@ def save_profile(line_user_id, **kwargs):
     conn.close()
 
 # ============================
+# Base44 API helpers
+# ============================
+
+def base44_post(path: str, payload: dict):
+    """呼叫 Base44 backend function，失敗不拋錯（靜默降級）"""
+    try:
+        resp = requests.post(
+            f"{BASE44_APP_URL}/functions/{path}",
+            json=payload,
+            headers={"Authorization": f"Bearer {BASE44_SERVICE_TOKEN}"},
+            timeout=10
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44] {path} 失敗: {e}")
+        return {}
+
+def sync_user_to_base44(profile: dict):
+    """同步用戶資料到 Base44 管理後台"""
+    if not profile.get('line_user_id'):
+        return
+    base44_post('syncUser', {
+        'line_user_id': profile.get('line_user_id', ''),
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', ''),
+        'coach_style': profile.get('coach_style', ''),
+        'quote_freq': profile.get('quote_freq', ''),
+        'total_messages': profile.get('total_messages', 0),
+        'reminder_enabled': bool(profile.get('reminder_enabled', False)),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+    })
+
+def save_goal_to_base44(line_user_id: str, display_name: str, title: str,
+                         goal_type: str = 'short', description: str = '', target_date: str = ''):
+    """儲存目標到 Base44"""
+    base44_post('saveGoalOrEvent', {
+        'entity_type': 'goal',
+        'line_user_id': line_user_id,
+        'display_name': display_name,
+        'title': title,
+        'type': goal_type,
+        'description': description,
+        'target_date': target_date,
+    })
+
+def save_event_to_base44(line_user_id: str, display_name: str, title: str,
+                          event_type: str = 'todo', due_date: str = '',
+                          recurrence: str = 'none', note: str = ''):
+    """儲存事件到 Base44"""
+    base44_post('saveGoalOrEvent', {
+        'entity_type': 'event',
+        'line_user_id': line_user_id,
+        'display_name': display_name,
+        'title': title,
+        'type': event_type,
+        'due_date': due_date,
+        'recurrence': recurrence,
+        'note': note,
+    })
+
+# ============================
 # LINE helpers
 # ============================
 
@@ -252,6 +317,8 @@ def handle_onboarding(line_user_id, text, profile):
         save_profile(line_user_id, quote_freq=opt['value'], onboarding_done=1, onboarding_step=5)
 
         p = get_profile(line_user_id)
+        # 同步到 Base44 管理後台
+        threading.Thread(target=sync_user_to_base44, args=(p,), daemon=True).start()
         name = p['display_name'] or '你'
         tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == p['coach_tone']), '')
         style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == p['coach_style']), '')
@@ -313,6 +380,52 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# 結構化資料解析（從 Dify 回應中抽取目標/事件）
+# ============================
+
+import re as _re
+
+def _parse_and_save_structured(user_id: str, display_name: str, answer: str):
+    """
+    解析 Dify 回應中的特殊標記，自動儲存到 Base44
+    Dify system prompt 會在特定情況下輸出這些標記（隱藏在回應結尾）
+    格式：
+      [GOAL:短期:我想在下個月減重3公斤:2026-05-31]
+      [EVENT:habit:每天早上跑步:daily]
+      [PROGRESS:我今天完成了跑步]
+    """
+    # 目標
+    for m in _re.finditer(r'\[GOAL:(\w+):([^\]:]+)(?::([^\]]*))?\]', answer):
+        goal_type_map = {'短期': 'short', '中期': 'medium', '長期': 'long',
+                         'short': 'short', 'medium': 'medium', 'long': 'long'}
+        gtype = goal_type_map.get(m.group(1), 'short')
+        title = m.group(2).strip()
+        target_date = m.group(3).strip() if m.group(3) else ''
+        print(f"[Structured] 儲存目標: {title} ({gtype})")
+        save_goal_to_base44(user_id, display_name, title, gtype, target_date=target_date)
+
+    # 事件/習慣
+    for m in _re.finditer(r'\[EVENT:(\w+):([^\]:]+)(?::([^\]]*))?\]', answer):
+        etype_map = {'habit': 'habit', 'todo': 'todo', 'milestone': 'milestone',
+                     'reminder': 'reminder', '習慣': 'habit', '待辦': 'todo', '里程碑': 'milestone'}
+        etype = etype_map.get(m.group(1), 'todo')
+        title = m.group(2).strip()
+        recurrence = m.group(3).strip() if m.group(3) else 'none'
+        print(f"[Structured] 儲存事件: {title} ({etype})")
+        save_event_to_base44(user_id, display_name, title, etype, recurrence=recurrence)
+
+    # 目標進度更新
+    for m in _re.finditer(r'\[PROGRESS:([^\]]+)\]', answer):
+        note = m.group(1).strip()
+        print(f"[Structured] 更新進度: {note}")
+        base44_post('saveGoalOrEvent', {
+            'entity_type': 'goal_progress',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'progress_note': note,
+        })
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -323,7 +436,15 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        if not answer:
+            return "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        # 解析 Dify 回應中的結構化標記，自動儲存目標/事件
+        threading.Thread(
+            target=_parse_and_save_structured,
+            args=(user_id, profile.get('display_name', ''), answer),
+            daemon=True
+        ).start()
+        return answer
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
@@ -454,6 +575,11 @@ def handle_message(event):
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+        # 更新訊息數並同步到 Base44（非同步，不影響回應速度）
+        total = (current_profile.get('total_messages') or 0) + 1
+        save_profile(user_id, total_messages=total)
+        updated = get_profile(user_id)
+        sync_user_to_base44(updated)
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
