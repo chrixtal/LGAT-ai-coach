@@ -15,6 +15,107 @@ import uvicorn
 
 BASE44_URL = "https://app-ffa38ee7.base44.app/functions"
 
+
+# ============================
+# Base44 API 整合
+# ============================
+
+def sync_user_to_base44(user_id, profile, total_messages):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": total_messages,
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+            "plan": profile.get('plan', 'free'),
+        }
+        resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json=payload,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[syncUser] OK | {user_id}")
+        else:
+            print(f"[syncUser] 失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[syncUser] 錯誤: {e}")
+
+def save_goal_or_event(entity_type, user_id, display_name, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        payload = {
+            "entity_type": entity_type,  # goal / event / goal_progress
+            "line_user_id": user_id,
+            "display_name": display_name,
+            **fields
+        }
+        resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+            json=payload,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[saveGoalOrEvent] OK | {entity_type} | {user_id}")
+        else:
+            print(f"[saveGoalOrEvent] 失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 錯誤: {e}")
+
+def detect_and_save_goals_events(user_id, text, display_name):
+    """偵測用戶訊息中的目標/事件關鍵詞，自動儲存"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞（新增目標）
+    goal_keywords = ['目標', '想要', '計畫', '想達成', '目的是', '想完成', '期望', '想學']
+    is_goal = any(kw in text_lower for kw in goal_keywords)
+    
+    if is_goal and len(text) > 5:
+        # 簡單啟發式：找第一個句子
+        title = text.split('。')[0].split('，')[0][:30]
+        goal_type = 'short'
+        if any(kw in text_lower for kw in ['三個月', '半年', '中期']): 
+            goal_type = 'medium'
+        elif any(kw in text_lower for kw in ['一年', '長期', '未來']):
+            goal_type = 'long'
+        
+        save_goal_or_event(
+            'goal',
+            user_id,
+            display_name,
+            title=title,
+            type=goal_type,
+        )
+    
+    # 事件關鍵詞（習慣/待辦）
+    event_keywords = {
+        '習慣': 'habit',
+        '待辦': 'todo',
+        '要做': 'todo',
+        '里程碑': 'milestone',
+        '完成': 'todo',
+    }
+    
+    for kw, event_type in event_keywords.items():
+        if kw in text_lower:
+            title = text.split('。')[0].split('，')[0][:30]
+            recurrence = 'daily' if '每天' in text_lower or '每日' in text_lower else 'none'
+            save_goal_or_event(
+                'event',
+                user_id,
+                display_name,
+                title=title,
+                type=event_type,
+                recurrence=recurrence,
+            )
+            break
+
+
 def sync_user_to_base44(user_id, profile, message_count):
     """同步用戶資料到 Base44"""
     try:
@@ -708,14 +809,14 @@ def handle_message(event):
         fresh_profile = get_profile(user_id)
         
         # 1. 同步用戶資料到 Base44
-        message_count = fresh_profile.get('total_messages', 0) + 1
+        message_count = fresh_profile.get('total_messages', 0)
         sync_user_to_base44(user_id, fresh_profile, message_count)
+        
+        # 2. 偵測並儲存目標/事件
+        detect_and_save_goals_events(user_id, user_text, fresh_profile.get('display_name', ''))
         
         try:
             ai_response = ask_dify(user_id, user_text, fresh_profile)
-            
-            # 2. 嘗試偵測並儲存目標/事件（關鍵詞判斷）
-            detect_and_save_goals_events(user_id, user_text, fresh_profile)
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
