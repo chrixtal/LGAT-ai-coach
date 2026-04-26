@@ -359,6 +359,74 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify inputs 組裝
 # ============================
 
+# ============================
+# Base44 後台整合
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        response = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+            },
+            timeout=5
+        )
+        if response.status_code != 200:
+            print(f"[Base44] syncUser 失敗: {response.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser 連線錯誤: {e}")
+
+def detect_and_save_goals_events(line_user_id, display_name, user_text):
+    """偵測用戶對話中的目標/事件，自動儲存"""
+    keywords_goal = ['我要', '我想', '目標是', '計劃', '想達成', '要完成']
+    keywords_event = ['習慣', '每天', '每週', '打卡', '完成', '記錄']
+    keywords_done = ['完成了', '做到了', '達成了', '成功']
+    
+    try:
+        # 檢查是否提及目標
+        if any(kw in user_text for kw in keywords_goal):
+            # 簡單的目標提取（實務上可用更複雜的 NLP）
+            title = user_text[:30] if len(user_text) > 30 else user_text
+            response = requests.post(
+                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'type': 'short',  # 預設短期，後續可改
+                },
+                timeout=5
+            )
+            if response.status_code == 200:
+                print(f"[Base44] 目標已儲存: {title}")
+        
+        # 檢查是否提及進度更新或完成
+        if any(kw in user_text for kw in keywords_done):
+            response = requests.post(
+                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal_progress',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'progress_note': user_text[:50],
+                    'status': 'completed' if '完成' in user_text else 'active',
+                },
+                timeout=5
+            )
+            if response.status_code == 200:
+                print(f"[Base44] 目標進度已更新")
+    except Exception as e:
+        print(f"[Base44] detect_and_save_goals_events 錯誤: {e}")
+
+
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
