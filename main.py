@@ -12,7 +12,7 @@ import uvicorn
 
 # --- Base44 Backend Functions ---
 BASE44_API_BASE = "https://app-ffa38ee7.base44.app/functions"
-from sync_integration import sync_user_to_base44, save_goal_to_base44, save_event_to_base44, detect_goal_or_event
+# 直接呼叫 Base44 backend functions
 
 app = FastAPI()
 
@@ -25,6 +25,118 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_FUNCTIONS_URL = os.environ.get('BASE44_FUNCTIONS_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+# ============================
+# Base44 API 輔助函數
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_FUNCTIONS_URL}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser OK: {line_user_id}")
+            return resp.json()
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+        return None
+
+def save_goal_to_base44(line_user_id, display_name, title, description='', goal_type='short', target_date=''):
+    """保存目標到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent',
+            json={
+                'entity_type': 'goal',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'description': description,
+                'type': goal_type,
+                'target_date': target_date,
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] saveGoal OK: {title}")
+            return resp.json()
+        else:
+            print(f"[Base44] saveGoal failed: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] saveGoal error: {e}")
+        return None
+
+def save_event_to_base44(line_user_id, display_name, title, event_type='todo', due_date='', recurrence='none'):
+    """保存事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent',
+            json={
+                'entity_type': 'event',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': event_type,
+                'due_date': due_date,
+                'recurrence': recurrence,
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] saveEvent OK: {title}")
+            return resp.json()
+        else:
+            print(f"[Base44] saveEvent failed: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] saveEvent error: {e}")
+        return None
+
+def detect_goal_or_event(text):
+    """簡單的關鍵字偵測，找出用戶是否在提目標或事件"""
+    goal_keywords = ['目標', '想要', '計畫', '目標是', '我要', '實現', '目標設定']
+    habit_keywords = ['習慣', '每天', '每週', '定期', '打卡', '追蹤', '養成']
+    todo_keywords = ['待辦', '代辦', '要做', '今天做', '完成', '待辦清單']
+    
+    result = {'type': None, 'keywords': []}
+    
+    for kw in goal_keywords:
+        if kw in text:
+            result['type'] = 'goal'
+            result['keywords'].append(kw)
+            break
+    
+    if not result['type']:
+        for kw in habit_keywords:
+            if kw in text:
+                result['type'] = 'habit'
+                result['keywords'].append(kw)
+                break
+    
+    if not result['type']:
+        for kw in todo_keywords:
+            if kw in text:
+                result['type'] = 'todo'
+                result['keywords'].append(kw)
+                break
+    
+    return result
+
 
 def _parse_options(env_val):
     result = {}
@@ -817,52 +929,72 @@ def save_goal_or_event(user_id, display_name, entity_type, **fields):
         print(f"[saveGoalOrEvent] 儲存失敗: {e}")
 
 @handler.add(MessageEvent, message=TextMessage)
+@handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
-    
-    # 同步用戶資料到 Base44
-    sync_to_base44(user_id, profile)
-
-    # 背景同步用戶資料到 Base44
-    def sync_in_background():
-        call_backend_function('syncUser', {
-            'line_user_id': user_id,
-            'display_name': profile.get('display_name'),
-            'coach_tone': profile.get('coach_tone'),
-            'coach_style': profile.get('coach_style'),
-            'quote_freq': profile.get('quote_freq'),
-            'total_messages': (profile.get('total_messages') or 0) + 1,
-        })
-    threading.Thread(target=sync_in_background, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=command_response))
+        # 背景同步到 Base44
+        def bg_sync():
+            sync_user_to_base44(user_id, profile.get('display_name'), profile.get('coach_tone'),
+                               profile.get('coach_style'), profile.get('quote_freq'),
+                               (profile.get('total_messages') or 0) + 1)
+        threading.Thread(target=bg_sync, daemon=True).start()
         return
 
     # 2. Onboarding 問卷
     onboarding_response = handle_onboarding(user_id, user_text, profile)
     if onboarding_response is not None:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
+        # 背景同步
+        def bg_sync_onboarding():
+            sync_user_to_base44(user_id, profile.get('display_name'), profile.get('coach_tone'),
+                               profile.get('coach_style'), profile.get('quote_freq'),
+                               (profile.get('total_messages') or 0) + 1)
+        threading.Thread(target=bg_sync_onboarding, daemon=True).start()
         return
 
     # 3. 正常 AI 對話
     replied_flag = threading.Event()
 
     def process_and_push():
+        # 發送 loading 動畫
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
-        ai_response = ask_dify_with_sync(user_id, user_text, current_profile)
         
-        # 背景偵測並儲存目標/事件
-        try:
-            detect_and_save_goal_or_event(user_id, user_text, current_profile)
-        except Exception as e:
-            print(f"[detect] 錯誤: {e}")
-
+        # 呼叫 Dify
+        ai_response = ask_dify(user_id, user_text, current_profile)
+        
+        # 背景任務：同步用戶 + 偵測並儲存目標/事件
+        def bg_tasks():
+            # 同步用戶（增加訊息計數）
+            sync_user_to_base44(user_id, current_profile.get('display_name'), 
+                               current_profile.get('coach_tone'),
+                               current_profile.get('coach_style'),
+                               current_profile.get('quote_freq'),
+                               (current_profile.get('total_messages') or 0) + 1)
+            
+            # 簡單的關鍵字偵測
+            detection = detect_goal_or_event(user_text)
+            if detection['type'] == 'goal':
+                # 從用戶文字中簡單提取標題
+                title = user_text[:30]  # 前 30 字作為標題
+                save_goal_to_base44(user_id, current_profile.get('display_name'), title)
+            elif detection['type'] == 'habit':
+                title = user_text[:30]
+                save_event_to_base44(user_id, current_profile.get('display_name'), title, 'habit')
+            elif detection['type'] == 'todo':
+                title = user_text[:30]
+                save_event_to_base44(user_id, current_profile.get('display_name'), title, 'todo')
+        
+        threading.Thread(target=bg_tasks, daemon=True).start()
+        
+        # 送出 AI 回應
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
