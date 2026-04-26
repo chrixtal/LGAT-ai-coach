@@ -105,6 +105,49 @@ def call_backend_function(function_name, data):
         print(f"[Backend] {function_name} 錯誤: {e}")
         return None
 
+
+def sync_user_to_base44(user_id, display_name, tone, style, quote, messages, reminder_enabled, reminder_time):
+    """背景同步用戶資料到 Base44"""
+    try:
+        call_backend_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'coach_tone': tone,
+            'coach_style': style,
+            'quote_freq': quote,
+            'total_messages': int(messages),
+            'reminder_enabled': reminder_enabled,
+            'reminder_time': reminder_time,
+        })
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+def save_goal_to_base44(user_id, display_name, title, goal_type='short'):
+    """儲存目標到 Base44"""
+    try:
+        call_backend_function('saveGoalOrEvent', {
+            'entity_type': 'goal',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+            'type': goal_type,
+        })
+    except Exception as e:
+        print(f"[save_goal] 失敗: {e}")
+
+def save_event_to_base44(user_id, display_name, title, event_type='todo'):
+    """儲存事件到 Base44"""
+    try:
+        call_backend_function('saveGoalOrEvent', {
+            'entity_type': 'event',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+            'type': event_type,
+        })
+    except Exception as e:
+        print(f"[save_event] 失敗: {e}")
+
 # ============================
 # DB 操作
 # ============================
