@@ -529,6 +529,16 @@ def handle_message(event):
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
+        current_profile = get_profile(user_id)
+        
+        # 同步用戶資料到 Base44
+        try:
+            # 更新訊息計數
+            current_profile['total_messages'] = (current_profile.get('total_messages', 0) or 0) + 1
+            save_profile(user_id, total_messages=current_profile['total_messages'])
+            sync_user_to_base44(user_id, current_profile)
+        except Exception as sync_err:
+            print(f"[sync] 錯誤: {sync_err}")
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
@@ -551,3 +561,70 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# ============================
+# Base44 API 整合
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://api.base44.com/v1')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID')
+BASE44_SERVICE_TOKEN = os.environ.get('BASE44_SERVICE_TOKEN')
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    if not BASE44_SERVICE_TOKEN:
+        print("[Base44] 缺少 SERVICE_TOKEN，跳過同步")
+        return
+    
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+            "plan": profile.get('plan', 'free'),
+        }
+        resp = requests.post(
+            f'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json=payload,
+            timeout=5,
+            headers={'Authorization': f'Bearer {BASE44_SERVICE_TOKEN}'}
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 同步用戶 {user_id} 成功")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def save_goal_to_base44(user_id, profile, title, description="", goal_type="short"):
+    """儲存目標到 Base44"""
+    if not BASE44_SERVICE_TOKEN:
+        return
+    
+    try:
+        payload = {
+            "entity_type": "goal",
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "title": title,
+            "description": description,
+            "type": goal_type,
+        }
+        resp = requests.post(
+            f'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+            json=payload,
+            timeout=5,
+            headers={'Authorization': f'Bearer {BASE44_SERVICE_TOKEN}'}
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 儲存目標成功: {title}")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
