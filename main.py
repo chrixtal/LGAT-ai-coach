@@ -332,11 +332,6 @@ def handle_onboarding(line_user_id, text, profile):
 # ============================
 
 def build_dify_inputs(profile):
-    import datetime, zoneinfo
-    tz = zoneinfo.ZoneInfo("Asia/Taipei")
-    now = datetime.datetime.now(tz)
-    current_time = now.strftime("%Y年%m月%d日 %H:%M（%A）")
-
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
     quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '偶爾適時引用即可')
@@ -345,8 +340,81 @@ def build_dify_inputs(profile):
         "coach_tone": tone_dify,
         "coach_style": style_dify,
         "quote_freq": quote_dify,
-        "current_time": current_time,
     }
+# ============================
+# Base44 API 呼叫
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, total_messages, profile):
+    """把用戶資料同步到 Base44 LgatUser"""
+    try:
+        data = {
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "coach_tone": profile.get("coach_tone"),
+            "coach_style": profile.get("coach_style"),
+            "quote_freq": profile.get("quote_freq"),
+            "total_messages": total_messages,
+        }
+        resp = requests.post(
+            "https://app-ffa38ee7.base44.app/functions/syncUser",
+            json=data,
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[syncUser] 已同步 | user={line_user_id}, messages={total_messages}")
+        else:
+            print(f"[syncUser] 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 錯誤: {e}")
+
+def save_goal_to_base44(line_user_id, display_name, title, goal_type="short"):
+    """偵測到用戶提到目標時，儲存到 Base44 LgatGoal"""
+    try:
+        data = {
+            "entity_type": "goal",
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "title": title,
+            "type": goal_type,
+            "description": "",
+        }
+        resp = requests.post(
+            "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent",
+            json=data,
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[saveGoal] 已保存 | user={line_user_id}, title={title}")
+        else:
+            print(f"[saveGoal] 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[saveGoal] 錯誤: {e}")
+
+def save_event_to_base44(line_user_id, display_name, title, event_type="todo"):
+    """偵測到用戶提到待辦/習慣時，儲存到 Base44 LgatEvent"""
+    try:
+        data = {
+            "entity_type": "event",
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "title": title,
+            "type": event_type,
+            "recurrence": "none",
+        }
+        resp = requests.post(
+            "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent",
+            json=data,
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[saveEvent] 已保存 | user={line_user_id}, title={title}")
+        else:
+            print(f"[saveEvent] 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[saveEvent] 錯誤: {e}")
+
+
 
 # ============================
 # Dify API 呼叫
@@ -506,10 +574,8 @@ def handle_message(event):
         sync_user_to_base44(
             user_id,
             current_profile.get('display_name', ''),
-            current_profile.get('coach_tone', ''),
-            current_profile.get('coach_style', ''),
-            current_profile.get('quote_freq', ''),
-            msg_count
+            msg_count,
+            current_profile
         )
 
         # 簡單關鍵字偵測：目標、事件、習慣
@@ -518,7 +584,7 @@ def handle_message(event):
         keywords_todo = ['待辦', '要做', '記得', '提醒']
 
         if any(kw in user_text for kw in keywords_goal) and len(user_text) > 4:
-            save_goal_to_base44(user_id, current_profile.get('display_name', ''), user_text, "", "short")
+            save_goal_to_base44(user_id, current_profile.get('display_name', ''), user_text, "short")
         elif any(kw in user_text for kw in keywords_habit) and len(user_text) > 4:
             save_event_to_base44(user_id, current_profile.get('display_name', ''), user_text, "habit")
         elif any(kw in user_text for kw in keywords_todo) and len(user_text) > 4:
