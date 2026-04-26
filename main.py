@@ -506,6 +506,53 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+def detect_and_save_goals_events(user_id, text, profile):
+    """偵測用戶文字中的目標/事件關鍵字，自動儲存"""
+    import re
+    
+    # 目標關鍵字
+    goal_keywords = ['目標', '想要', '計畫', '努力', '達成', '完成']
+    # 事件關鍵字
+    event_keywords = ['習慣', '待辦', '打卡', '任務', '里程碑']
+    
+    has_goal = any(kw in text for kw in goal_keywords)
+    has_event = any(kw in text for kw in event_keywords)
+    
+    if not has_goal and not has_event:
+        return
+    
+    try:
+        # 簡單的標題提取（取前 50 字）
+        title = text[:50] if len(text) <= 50 else text[:47] + '...'
+        
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'title': title,
+        }
+        
+        if has_goal:
+            payload['entity_type'] = 'goal'
+            payload['type'] = 'short'
+            requests.post(
+                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[saveGoalOrEvent] 目標已存: {title}")
+        
+        if has_event:
+            payload['entity_type'] = 'event'
+            payload['type'] = 'todo'
+            requests.post(
+                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[saveGoalOrEvent] 事件已存: {title}")
+    except Exception as e:
+        print(f"[detect_and_save] 失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
