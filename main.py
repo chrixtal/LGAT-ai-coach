@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+import json
 
 app = FastAPI()
 
@@ -18,6 +19,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '')
+BASE44_API_URL = 'https://api.base44.com'  # Base44 API 端點
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
 
 # 教練設定（從環境變數讀取）
@@ -387,6 +390,52 @@ def detect_goal_in_response(response_text: str) -> dict:
     
     return {"detected": None, "confidence": 0}
 
+# ============================
+# Base44 API 呼叫（後台資料同步）
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ 用戶 {display_name} 已同步")
+        else:
+            print(f"[Base44 Sync] ⚠️ 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 Sync] 連線失敗: {e}")
+
+def save_goal_to_base44(line_user_id, display_name, entity_type, **fields):
+    """儲存目標/事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                **fields,
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            print(f"[Base44 Save] ✅ {entity_type} 已儲存")
+        else:
+            print(f"[Base44 Save] ⚠️ 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 Save] 連線失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -473,6 +522,23 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 0. 同步用戶資料到 Base44
+    try:
+        base44_url = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+        sync_payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0) + 1,
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        requests.post(f'{base44_url}/functions/syncUser', json=sync_payload, timeout=5)
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
