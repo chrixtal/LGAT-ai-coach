@@ -763,14 +763,40 @@ def handle_command(user_id, text, profile):
         tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '未設定')
         style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '未設定')
         quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '未設定')
+        reminder_info = f"🔔 晨間提醒：{profile.get('reminder_time', '未設定')}" if profile.get('reminder_enabled') else "🔔 晨間提醒：未開啟"
         return (
             f"📋 你的教練設定：\n\n"
             f"👤 名字：{name}\n"
             f"🎯 語氣：{tone_label}\n"
             f"💬 溝通方式：{style_label}\n"
-            f"📚 引用頻率：{quote_label}\n\n"
-            "用 /setting 可以重新調整～"
+            f"📚 引用頻率：{quote_label}\n"
+            f"{reminder_info}\n\n"
+            "用 /setting 重新調整風格，/remind HH:MM 設定提醒時間～"
         )
+
+    if cmd.startswith('/remind '):
+        # 解析 /remind HH:MM 格式
+        time_str = text.strip().split(' ', 1)[1].strip()
+        if ':' in time_str:
+            try:
+                hour, minute = map(int, time_str.split(':'))
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    save_profile(user_id, reminder_enabled=True, reminder_time=time_str)
+                    # 非同步同步到 Base44
+                    threading.Thread(
+                        target=lambda: sync_to_base44(user_id, profile),
+                        daemon=True
+                    ).start()
+                    name = profile.get('display_name') or '你'
+                    return f"✅ 設定完成！我每天 {time_str} 會傳晨間問候給 {name} 🌅"
+            except:
+                pass
+        return "⏰ 請輸入正確的時間格式，例如：/remind 08:00"
+
+    if cmd == '/reminder_off':
+        save_profile(user_id, reminder_enabled=False)
+        threading.Thread(target=lambda: sync_to_base44(user_id, profile), daemon=True).start()
+        return "🔕 已關閉晨間提醒"
 
     return None
 
