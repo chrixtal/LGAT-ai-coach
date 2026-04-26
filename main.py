@@ -32,6 +32,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+MAINTENANCE_MODE = os.environ.get('MAINTENANCE_MODE', '0').strip() == '1'
+MAINTENANCE_MSG = os.environ.get('MAINTENANCE_MSG', '🔧 澄若水目前正在升級新功能中，暫時無法回覆。\n\n升級完成後我會主動通知你，請稍候！💪')
 
 def _parse_options(env_val):
     result = {}
@@ -392,6 +394,62 @@ def detect_and_save_goal_or_event(user_id, text, profile):
         print(f"[Base44] 偵測/儲存失敗: {e}")
 
 
+# ============================
+# 維護通知工具
+# ============================
+
+def get_maintenance_users():
+    """取得所有需要收到升級完成通知的用戶"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT line_user_id FROM maintenance_notified WHERE notified = 0')
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def mark_maintenance_user(line_user_id):
+    """記錄這個用戶在維護期間嘗試過對話"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS maintenance_notified (
+        line_user_id TEXT PRIMARY KEY,
+        notified INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('INSERT OR IGNORE INTO maintenance_notified (line_user_id) VALUES (?)', (line_user_id,))
+    conn.commit()
+    conn.close()
+
+def send_maintenance_complete_push():
+    """升級完成後，主動通知所有在維護期間嘗試對話的用戶"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT line_user_id FROM maintenance_notified WHERE notified = 0')
+    rows = c.fetchall()
+    conn.close()
+    
+    msg = os.environ.get('MAINTENANCE_DONE_MSG', '🎉 澄若水升級完成！新功能已上線，來聊聊吧 💬')
+    notified = []
+    for (uid,) in rows:
+        try:
+            requests.post('https://api.line.me/v2/bot/message/push',
+                headers={'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}', 'Content-Type': 'application/json'},
+                json={'to': uid, 'messages': [{'type': 'text', 'text': msg}]},
+                timeout=10)
+            notified.append(uid)
+        except Exception as e:
+            print(f"[Maintenance] push 失敗 {uid}: {e}")
+    
+    if notified:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        for uid in notified:
+            c.execute('UPDATE maintenance_notified SET notified = 1 WHERE line_user_id = ?', (uid,))
+        conn.commit()
+        conn.close()
+    
+    return notified
+
 @app.post("/callback")
 async def callback(request: Request):
     signature = request.headers.get('X-Line-Signature', '')
@@ -481,7 +539,17 @@ def handle_message(event):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "maintenance": MAINTENANCE_MODE}
+
+@app.post("/maintenance-done")
+async def maintenance_done(request: Request):
+    """升級完成後呼叫此端點，主動通知所有等待中的用戶"""
+    secret = request.headers.get("X-Admin-Secret", "")
+    admin_secret = os.environ.get("ADMIN_SECRET", "lgat-admin")
+    if secret != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    notified = send_maintenance_complete_push()
+    return {"ok": True, "notified_count": len(notified), "notified": notified}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
