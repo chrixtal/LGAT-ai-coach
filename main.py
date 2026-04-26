@@ -526,6 +526,33 @@ def ask_dify(user_id, text, profile):
             "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
         )
 
+def sync_to_base44(user_id: str, profile: dict, add_message_count=1):
+    """非同步呼叫 syncUser function，保持用戶資料最新"""
+    def _sync():
+        try:
+            import requests as req
+            url = "https://app-ffa38ee7.base44.app/functions/syncUser"
+            payload = {
+                "line_user_id": user_id,
+                "display_name": profile.get("display_name", ""),
+                "coach_tone": profile.get("coach_tone", "balanced"),
+                "coach_style": profile.get("coach_style", "exploratory"),
+                "quote_freq": profile.get("quote_freq", "sometimes"),
+                "total_messages": (profile.get("total_messages", 0) or 0) + add_message_count,
+                "reminder_enabled": profile.get("reminder_enabled", False),
+                "reminder_time": profile.get("reminder_time", "08:00"),
+                "plan": profile.get("plan", "free"),
+            }
+            resp = req.post(url, json=payload, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44 Sync] ✅ {user_id}")
+            else:
+                print(f"[Base44 Sync] ❌ status={resp.status_code}")
+        except Exception as e:
+            print(f"[Base44 Sync] 錯誤: {e}")
+    
+    threading.Thread(target=_sync, daemon=True).start()
+
 # ============================
 # 指令處理
 # ============================
