@@ -19,6 +19,51 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
+BASE44_APP_ID = "69e35caa4e5d9a67dd7dd6e1"
+BASE44_API_URL = "https://app-ffa38ee7.base44.app/functions"
+
+def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """每次對話時同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_API_URL}/syncUser",
+            json={
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "coach_tone": coach_tone,
+                "coach_style": coach_style,
+                "quote_freq": quote_freq,
+                "total_messages": total_messages,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶 {user_id} 同步成功")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步異常: {e}")
+
+def save_goal_to_base44(user_id, display_name, goal_title, goal_type="short"):
+    """儲存目標到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_API_URL}/saveGoalOrEvent",
+            json={
+                "entity_type": "goal",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": goal_title,
+                "type": goal_type,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 目標 '{goal_title}' 已儲存")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 儲存異常: {e}")
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
@@ -457,6 +502,23 @@ def handle_message(event):
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
 
     threading.Thread(target=process_and_push, daemon=True).start()
+
+    # 同步用戶資料到 Base44（非同步，不影響 LINE 回應速度）
+    def sync_async():
+        try:
+            current_profile = get_profile(user_id)
+            current_profile['total_messages'] = (current_profile.get('total_messages', 0) or 0) + 1
+            sync_user_to_base44(
+                user_id,
+                current_profile.get('display_name', ''),
+                current_profile.get('coach_tone', 'balanced'),
+                current_profile.get('coach_style', 'exploratory'),
+                current_profile.get('quote_freq', 'sometimes'),
+                current_profile['total_messages']
+            )
+        except Exception as e:
+            print(f"[sync] 失敗: {e}")
+    threading.Thread(target=sync_async, daemon=True).start()
 
 @app.get("/health")
 async def health():
