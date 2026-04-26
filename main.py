@@ -511,10 +511,6 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
 
-    # 更新訊息計數
-    increment_message_count(user_id)
-    profile['total_messages'] = (profile.get('total_messages', 0) or 0) + 1
-
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
@@ -527,45 +523,46 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
         return
 
-    # 3. 同步用戶資料到 Base44
-    sync_user_to_base44(user_id, profile)
-
-    # 4. 正常對話（背景執行）
+    # 3. 正常 AI 對話（背景執行 + Base44 同步）
     replied_flag = threading.Event()
 
     def process_and_push():
-        # 1. 同步用戶資料到 Base44
         current_profile = get_profile(user_id)
-        try:
-            requests.post(
-                f'{BASE44_API_BASE}/syncUser',
-                json={
-                    'line_user_id': user_id,
-                    'display_name': current_profile.get('display_name', ''),
-                    'coach_tone': current_profile.get('coach_tone', ''),
-                    'coach_style': current_profile.get('coach_style', ''),
-                    'quote_freq': current_profile.get('quote_freq', ''),
-                    'total_messages': (current_profile.get('total_messages') or 0) + 1,
-                    'reminder_enabled': current_profile.get('reminder_enabled', False),
-                    'reminder_time': current_profile.get('reminder_time', ''),
-                },
-                timeout=5
-            )
-        except Exception as e:
-            print(f"[syncUser] 失敗: {e}")
+        msg_count = (current_profile.get('total_messages', 0) or 0) + 1
 
-        # 2. 偵測目標/事件關鍵字並自動儲存
-        detect_and_save(user_id, user_text, current_profile)
+        # 同步用戶資料到 Base44
+        sync_user_to_base44(
+            user_id,
+            current_profile.get('display_name', ''),
+            current_profile.get('coach_tone', ''),
+            current_profile.get('coach_style', ''),
+            current_profile.get('quote_freq', ''),
+            msg_count
+        )
 
-        # 3. 送 loading animation，等 Dify 回應
+        # 簡單關鍵字偵測：目標、事件、習慣
+        keywords_goal = ['目標', '我想', '達成', '計畫', '完成']
+        keywords_habit = ['習慣', '每天', '養成', '打卡']
+        keywords_todo = ['待辦', '要做', '記得', '提醒']
+
+        if any(kw in user_text for kw in keywords_goal) and len(user_text) > 4:
+            save_goal_to_base44(user_id, current_profile.get('display_name', ''), user_text, "", "short")
+        elif any(kw in user_text for kw in keywords_habit) and len(user_text) > 4:
+            save_event_to_base44(user_id, current_profile.get('display_name', ''), user_text, "habit")
+        elif any(kw in user_text for kw in keywords_todo) and len(user_text) > 4:
+            save_event_to_base44(user_id, current_profile.get('display_name', ''), user_text, "todo")
+
+        # 送 loading animation
         send_loading_animation(user_id, seconds=60)
+        
+        # 等 Dify 回應
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
-            print(f"[handle_message] 未預期錯誤: {e}")
+            print(f"[ask_dify] 錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
-        
-        # 4. 一次性發送回應
+
+        # 一次性發送回應
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
@@ -583,3 +580,69 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# ============================
+# Base44 Backend Integration
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://api.base44.com')
+
+def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """向 Base44 同步用戶資料"""
+    try:
+        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/syncUser'
+        payload = {
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "coach_tone": coach_tone,
+            "coach_style": coach_style,
+            "quote_freq": quote_freq,
+            "total_messages": total_messages,
+        }
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser OK | {user_id}")
+        else:
+            print(f"[Base44] syncUser failed {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def save_goal_to_base44(user_id, display_name, title, description="", goal_type="short"):
+    """儲存目標到 Base44"""
+    try:
+        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/saveGoalOrEvent'
+        payload = {
+            "entity_type": "goal",
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "title": title,
+            "description": description,
+            "type": goal_type,
+        }
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"[Base44] saveGoalOrEvent OK | goal: {title}")
+        else:
+            print(f"[Base44] saveGoalOrEvent failed {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] saveGoalOrEvent error: {e}")
+
+def save_event_to_base44(user_id, display_name, title, event_type="todo"):
+    """儲存事件到 Base44"""
+    try:
+        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/saveGoalOrEvent'
+        payload = {
+            "entity_type": "event",
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "title": title,
+            "type": event_type,
+        }
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"[Base44] saveGoalOrEvent OK | event: {title}")
+        else:
+            print(f"[Base44] saveGoalOrEvent failed {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] saveGoalOrEvent error: {e}")
