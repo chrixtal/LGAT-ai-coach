@@ -964,6 +964,10 @@ def handle_message(event):
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
+        # 同步用戶資料到 Base44
+        display_name = current_profile.get("display_name") or get_line_display_name(user_id) or "用戶"
+        sync_user_to_base44(user_id, display_name, current_profile)
+
             if not replied_flag.is_set():
                 replied_flag.set()
                 line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
@@ -1120,3 +1124,46 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     start_reminder_background()  # 啟動提醒檢查
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+# ============================
+# Base44 後台同步
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
+        resp = requests.post(base44_api, json={
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'coach_tone': profile.get('coach_tone'),
+            'coach_style': profile.get('coach_style'),
+            'quote_freq': profile.get('quote_freq'),
+            'total_messages': profile.get('total_messages', 0) + 1,
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }, timeout=5)
+        if resp.ok:
+            print(f"[Base44] 用戶資料已同步: {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **kwargs):
+    """儲存目標或事件到 Base44 後台"""
+    try:
+        base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent')
+        resp = requests.post(base44_api, json={
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'entity_type': entity_type,
+            **kwargs
+        }, timeout=5)
+        if resp.ok:
+            print(f"[Base44] {entity_type} 已儲存: {kwargs.get('title', '?')}")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
