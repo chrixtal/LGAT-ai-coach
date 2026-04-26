@@ -534,6 +534,23 @@ def save_goal_or_event(entity_type, user_id, display_name, **fields):
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
+    
+    # 同時發起背景執行緒同步用戶資料到 Base44
+    def sync_to_base44():
+        try:
+            base44_url = f"{os.environ.get('BASE44_API_URL', 'https://api.base44.com')}/functions/syncUser"
+            requests.post(base44_url, json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+            }, timeout=5)
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+    
+    threading.Thread(target=sync_to_base44, daemon=True).start()
 
     try:
         result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
@@ -541,6 +558,10 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        # 嘗試從回應中偵測目標或事件（簡單的關鍵字匹配）
+        if answer:
+            detect_and_save(user_id, profile.get('display_name', ''), text, answer)
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
