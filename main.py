@@ -443,6 +443,30 @@ def parse_and_save_goal_or_event(line_user_id, display_name, ai_response):
     except Exception as e:
         print(f"[Base44] 解析標記失敗: {e}")
 
+def _parse_and_save_entities(user_id, answer):
+    """偵測回應中的 [GOAL] 和 [EVENT] 標記，自動儲存"""
+    # 格式: [GOAL]title=...;type=short;target_date=...;description=...[/GOAL]
+    goal_pattern = r'\[GOAL\](.*?)\[/GOAL\]'
+    event_pattern = r'\[EVENT\](.*?)\[/EVENT\]'
+    
+    for match in re.finditer(goal_pattern, answer):
+        fields = {}
+        for pair in match.group(1).split(';'):
+            if '=' in pair:
+                k, v = pair.split('=', 1)
+                fields[k.strip()] = v.strip()
+        if 'title' in fields:
+            save_goal_or_event(user_id, 'goal', fields)
+    
+    for match in re.finditer(event_pattern, answer):
+        fields = {}
+        for pair in match.group(1).split(';'):
+            if '=' in pair:
+                k, v = pair.split('=', 1)
+                fields[k.strip()] = v.strip()
+        if 'title' in fields:
+            save_goal_or_event(user_id, 'event', fields)
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -453,7 +477,17 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        
+        if answer:
+            # 追蹤訊息數
+            current_total = profile.get('total_messages', 0)
+            save_profile(user_id, total_messages=current_total + 1)
+            
+            # 偵測 [GOAL] 和 [EVENT] 標記，自動儲存
+            _parse_and_save_entities(user_id, answer)
+            
+            return answer
+        return "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
