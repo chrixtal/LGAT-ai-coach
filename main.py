@@ -467,6 +467,103 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 Backend Integration
+# ============================
+
+BACKEND_API_BASE = os.environ.get('BACKEND_API_BASE', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_backend(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        data = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name') or '',
+            "coach_tone": profile.get('coach_tone') or 'balanced',
+            "coach_style": profile.get('coach_style') or 'exploratory',
+            "quote_freq": profile.get('quote_freq') or 'sometimes',
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(f'{BACKEND_API_BASE}/functions/syncUser', json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Backend] 用戶 {line_user_id} 已同步")
+        else:
+            print(f"[Backend] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Backend] 同步異常: {e}")
+
+def save_goal_or_event(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        data = {
+            "entity_type": entity_type,
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            **fields
+        }
+        resp = requests.post(f'{BACKEND_API_BASE}/functions/saveGoalOrEvent', json=data, timeout=5)
+        if resp.status_code == 200:
+            result = resp.json()
+            print(f"[Backend] {entity_type} 已儲存: {result.get('result', {}).get('id', '?')}")
+            return True
+        else:
+            print(f"[Backend] 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Backend] 儲存異常: {e}")
+    return False
+
+
+def _detect_and_save_goal_or_event(line_user_id, user_text, profile):
+    """偵測對話中的目標或事件關鍵字，自動儲存"""
+    display_name = profile.get('display_name', '用戶')
+    
+    # 目標相關關鍵字
+    goal_keywords = [
+        (r'我想(.{2,20})', 'goal'),
+        (r'目標是(.{2,20})', 'goal'),
+        (r'我要(.{2,20})', 'goal'),
+        (r'計畫(.{2,20})', 'goal'),
+    ]
+    
+    # 事件相關關鍵字
+    event_keywords = [
+        (r'完成了(.{2,20})', 'event'),
+        (r'我做(.{2,20})', 'event'),
+        (r'習慣(.{2,20})', 'event'),
+    ]
+    
+    # 檢查目標
+    for pattern, _ in goal_keywords:
+        match = re.search(pattern, user_text)
+        if match:
+            goal_title = match.group(1).strip()
+            if len(goal_title) > 2:
+                save_goal_or_event(
+                    line_user_id, display_name,
+                    'goal',
+                    title=goal_title,
+                    type='short'
+                )
+                break
+    
+    # 檢查事件
+    for pattern, _ in event_keywords:
+        match = re.search(pattern, user_text)
+        if match:
+            event_title = match.group(1).strip()
+            if len(event_title) > 2:
+                save_goal_or_event(
+                    line_user_id, display_name,
+                    'event',
+                    title=event_title,
+                    type='todo'
+                )
+                break
+
+
 # ============================
 # LINE Webhook
 # ============================
@@ -486,6 +583,9 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 同步用戶（確保在後台有記錄）
+    sync_user_to_backend(user_id, profile)
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
