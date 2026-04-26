@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+import json
 
 # Backend API
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
@@ -379,6 +380,51 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+
+# ============================
+# Base44 API 呼叫
+# ============================
+
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+
+async def call_base44_function(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f"{BASE44_APP_URL}/functions/{function_name}"
+        resp = requests.post(url, json=payload, timeout=10)
+        return resp.json() if resp.ok else None
+    except Exception as e:
+        print(f"[Base44] {function_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44（每次對話後呼叫）"""
+    threading.Thread(
+        target=lambda: call_base44_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', ''),
+            'coach_style': profile.get('coach_style', ''),
+            'quote_freq': profile.get('quote_freq', ''),
+            'total_messages': profile.get('total_messages', 0) + 1,
+        }),
+        daemon=True
+    ).start()
+
+def save_goal_or_event(user_id, display_name, entity_type, **fields):
+    """存目標或事件到 Base44（偵測到用戶說「我想...」時呼叫）"""
+    payload = {
+        'entity_type': entity_type,
+        'line_user_id': user_id,
+        'display_name': display_name,
+        **fields
+    }
+    return call_base44_function('saveGoalOrEvent', payload)
+
+# ============================
+# Dify API 呼叫（含備援）
+# ============================
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
