@@ -430,6 +430,95 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Base44 Sync Functions
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, total_messages=None, **kwargs):
+    """同步用戶資料到 Base44"""
+    base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    try:
+        data = {
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+        }
+        data.update(kwargs)
+        if total_messages is not None:
+            data['total_messages'] = total_messages
+        
+        resp = requests.post(
+            f'{base44_url}/functions/syncUser',
+            json=data,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] 用戶同步成功: {line_user_id}")
+            return True
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+        return False
+
+def save_goal_or_event_to_base44(entity_type, line_user_id, display_name, **fields):
+    """儲存目標或事件到 Base44"""
+    base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    try:
+        data = {
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+        }
+        data.update(fields)
+        
+        resp = requests.post(
+            f'{base44_url}/functions/saveGoalOrEvent',
+            json=data,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] {entity_type} 儲存成功")
+            return True
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+        return False
+
+
+def detect_and_save_entities(line_user_id, profile, text):
+    """偵測關鍵詞，自動儲存目標或事件"""
+    name = profile.get('display_name') or '用戶'
+    text_lower = text.lower()
+    
+    # 簡單的關鍵詞偵測（實際上可以用 NLP，但先用簡單方式）
+    goal_keywords = ['目標', '想要', '計畫', '想達成', '目標是', '要完成']
+    event_keywords = ['明天', '今天', '這週', '習慣', '打卡', '待辦', '提醒']
+    
+    # 若用戶提到目標
+    if any(kw in text_lower for kw in goal_keywords):
+        save_goal_or_event_to_base44(
+            entity_type='goal',
+            line_user_id=line_user_id,
+            display_name=name,
+            title=text[:50],  # 用前 50 字作標題
+            description=text,
+            type='short',  # 預設短期，使用者可在管理介面改
+        )
+    
+    # 若用戶提到事件/習慣
+    if any(kw in text_lower for kw in event_keywords):
+        save_goal_or_event_to_base44(
+            entity_type='event',
+            line_user_id=line_user_id,
+            display_name=name,
+            title=text[:50],
+            type='todo',
+        )
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
