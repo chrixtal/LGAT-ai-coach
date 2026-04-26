@@ -19,7 +19,6 @@ DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
-BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
 # 教練設定（從環境變數讀取）
@@ -185,7 +184,6 @@ def sync_user_to_base44(line_user_id, profile):
     """同步用戶資料到 Base44 後台"""
     try:
         resp = requests.post(
-            f'{BASE44_API_URL}/syncUser',
             json={
                 'line_user_id': line_user_id,
                 'display_name': profile.get('display_name'),
@@ -220,7 +218,6 @@ def save_goal_or_event(line_user_id, entity_type, title, description="", goal_ty
             payload['due_date'] = target_date
             payload['recurrence'] = recurrence
         
-        resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=payload, timeout=5)
         if resp.ok:
             print(f"[Base44] 已儲存 {entity_type}: {title}")
         else:
@@ -251,7 +248,6 @@ def _quote_question():
 # ============================
 
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
-BASE44_API_URL = f'https://app.base44.app/functions'
 
 def call_backend_function(function_name, payload):
     """呼叫 Base44 backend function"""
@@ -622,7 +618,6 @@ def _parse_and_save_entities(user_id, answer, profile):
 def sync_user_to_base44(line_user_id, profile):
     """非同步同步用戶資料到 Base44"""
     try:
-        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
         resp = requests.post(base44_url, json={
             'line_user_id': line_user_id,
             'display_name': profile.get('display_name') or '',
@@ -659,7 +654,6 @@ def sync_user_to_base44(line_user_id, display_name, profile):
             "reminder_time": profile.get('reminder_time', '08:00'),
         }
         resp = requests.post(
-            f'{BASE44_API_URL}/functions/syncUser',
             json=data,
             timeout=5
         )
@@ -680,7 +674,6 @@ def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fiel
             **fields
         }
         resp = requests.post(
-            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
             json=data,
             timeout=5
         )
@@ -690,6 +683,73 @@ def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fiel
             print(f"[Base44] save{entity_type.capitalize()} 失敗: {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"[Base44] save{entity_type.capitalize()} 錯誤: {e}")
+
+
+# ============================
+# Base44 整合
+# ============================
+
+def sync_user_to_base44(user_id, display_name, profile):
+    """呼叫 syncUser function，同步用戶資料到 Base44"""
+    url = 'https://app-ffa38ee7.base44.app/functions/syncUser'
+    payload = {
+        'line_user_id': user_id,
+        'display_name': display_name,
+        'coach_tone': profile.get('coach_tone', 'balanced'),
+        'coach_style': profile.get('coach_style', 'exploratory'),
+        'quote_freq': profile.get('quote_freq', 'sometimes'),
+        'total_messages': profile.get('total_messages', 0),
+        'reminder_enabled': profile.get('reminder_enabled', False),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+        'plan': profile.get('plan', 'free'),
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶 {user_id} 同步成功")
+            return True
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+    return False
+
+def save_goal_to_base44(user_id, display_name, goal_data):
+    """呼叫 saveGoalOrEvent 存目標"""
+    url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+    payload = {
+        'entity_type': 'goal',
+        'line_user_id': user_id,
+        'display_name': display_name,
+        'title': goal_data.get('title', ''),
+        'description': goal_data.get('description', ''),
+        'type': goal_data.get('type', 'short'),
+        'target_date': goal_data.get('target_date', ''),
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"[Base44] 目標已儲存: {goal_data.get('title')}")
+            return True
+    except Exception as e:
+        print(f"[Base44] 儲存目標錯誤: {e}")
+    return False
+
+def parse_goal_from_response(ai_response):
+    """從 AI 回應中解析目標資訊 [GOAL_MARKER|title:標題|type:short|deadline:2026-05-26]"""
+    marker = re.search(r'\[GOAL_MARKER\|([^\]]+)\]', ai_response)
+    if not marker:
+        return None
+    fields = {}
+    for pair in marker.group(1).split('|'):
+        if ':' in pair:
+            k, v = pair.split(':', 1)
+            fields[k.strip()] = v.strip()
+    return {
+        'title': fields.get('title', ''),
+        'description': fields.get('description', ''),
+        'type': fields.get('type', 'short'),
+        'target_date': fields.get('deadline', ''),
+    } if fields.get('title') else None
+
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
@@ -956,7 +1016,6 @@ if __name__ == "__main__":
 
 import json
 
-BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 def sync_user_to_base44(user_id: str, profile: dict):
     """同步用戶資料到 Base44"""
@@ -971,7 +1030,6 @@ def sync_user_to_base44(user_id: str, profile: dict):
             'reminder_enabled': profile.get('reminder_enabled', False),
             'reminder_time': profile.get('reminder_time', '08:00'),
         }
-        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=data, timeout=5)
         if resp.status_code == 200:
             print(f"[Base44] 同步用戶 {user_id} 成功")
         else:
@@ -1015,7 +1073,6 @@ def extract_goal_or_event(text: str, profile: dict) -> dict | None:
 def save_goal_or_event_to_base44(payload: dict):
     """儲存目標或事件到 Base44"""
     try:
-        resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=payload, timeout=5)
         if resp.status_code == 200:
             print(f"[Base44] 儲存 {payload.get('entity_type')} 成功")
         else:
