@@ -437,6 +437,83 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Backend Functions Integration
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+def sync_user_to_backend(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name') or '',
+            'coach_tone': profile.get('coach_tone') or 'balanced',
+            'coach_style': profile.get('coach_style') or 'exploratory',
+            'quote_freq': profile.get('quote_freq') or 'sometimes',
+            'total_messages': profile.get('total_messages', 0) + 1,
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] User {user_id} synced")
+        else:
+            print(f"[Base44] Sync failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] sync_user error: {e}")
+
+def try_save_goal_or_event(user_id, user_input, ai_response, profile):
+    """偵測用戶輸入和 AI 回應，嘗試提取並儲存目標/事件"""
+    try:
+        # 簡單的關鍵字偵測
+        name = profile.get('display_name') or '用戶'
+        
+        # 目標偵測
+        goal_keywords = ['目標', '想要', '要達成', '計畫', '目的']
+        if any(kw in user_input for kw in goal_keywords):
+            # 如果用戶提到目標，嘗試從 AI 回應中提取信息
+            # 這裡可以做更複雜的 NLP，現在先簡單偵測
+            if '短期' in user_input or '1個月' in user_input or '一個月' in user_input:
+                goal_type = 'short'
+            elif '中期' in user_input or '3-6個月' in user_input:
+                goal_type = 'medium'
+            else:
+                goal_type = 'long'
+            
+            payload = {
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': name,
+                'title': user_input[:30],  # 取前 30 字作標題
+                'description': ai_response[:100],
+                'type': goal_type,
+            }
+            resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=payload, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] Goal saved for {user_id}")
+        
+        # 事件偵測
+        event_keywords = ['待辦', '要做', '提醒我', '習慣', '打卡']
+        if any(kw in user_input for kw in event_keywords):
+            event_type = 'habit' if '習慣' in user_input else 'todo'
+            payload = {
+                'entity_type': 'event',
+                'line_user_id': user_id,
+                'display_name': name,
+                'title': user_input[:30],
+                'type': event_type,
+                'recurrence': 'daily' if '每天' in user_input or '每日' in user_input else 'none',
+            }
+            resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=payload, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] Event saved for {user_id}")
+    except Exception as e:
+        print(f"[Base44] try_save_goal_or_event error: {e}")
+
 # ============================
 # LINE Webhook
 # ============================
