@@ -531,6 +531,79 @@ def save_goal_or_event(entity_type, user_id, display_name, **fields):
         print(f"[Base44 save{entity_type.title()}] 錯誤: {e}")
 
 
+
+# ============================
+# Base44 Backend Function 呼叫
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_APP_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+def call_base44_function(func_name, data):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_APP_URL}/{func_name}'
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"[Base44] {func_name} 錯誤: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 呼叫失敗: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, profile):
+    """把用戶資料同步到 Base44"""
+    data = {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', 'balanced'),
+        'coach_style': profile.get('coach_style', 'exploratory'),
+        'quote_freq': profile.get('quote_freq', 'sometimes'),
+        'total_messages': profile.get('total_messages', 0),
+    }
+    return call_base44_function('syncUser', data)
+
+def save_goal_to_base44(line_user_id, title, description='', goal_type='short', target_date=''):
+    """儲存目標到 Base44"""
+    profile = get_profile(line_user_id)
+    data = {
+        'entity_type': 'goal',
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name', ''),
+        'title': title,
+        'description': description,
+        'type': goal_type,
+        'target_date': target_date,
+    }
+    return call_base44_function('saveGoalOrEvent', data)
+
+def save_event_to_base44(line_user_id, title, event_type='todo', due_date='', recurrence='none'):
+    """儲存事件/習慣到 Base44"""
+    profile = get_profile(line_user_id)
+    data = {
+        'entity_type': 'event',
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name', ''),
+        'title': title,
+        'type': event_type,
+        'due_date': due_date,
+        'recurrence': recurrence,
+    }
+    return call_base44_function('saveGoalOrEvent', data)
+
+def update_goal_progress(line_user_id, progress_note='', status='active'):
+    """更新目標進度"""
+    data = {
+        'entity_type': 'goal_progress',
+        'line_user_id': line_user_id,
+        'progress_note': progress_note,
+        'status': status,
+    }
+    return call_base44_function('saveGoalOrEvent', data)
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
