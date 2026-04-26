@@ -8,6 +8,9 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+# Backend API
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -507,6 +510,26 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 同步用戶資料到 Base44 後台
+    try:
+        profile_for_sync = get_profile(user_id)
+        requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile_for_sync.get('display_name') or '',
+                'coach_tone': profile_for_sync.get('coach_tone'),
+                'coach_style': profile_for_sync.get('coach_style'),
+                'quote_freq': profile_for_sync.get('quote_freq'),
+                'total_messages': profile_for_sync.get('total_messages', 0) + 1,
+                'reminder_enabled': profile_for_sync.get('reminder_enabled', False),
+                'reminder_time': profile_for_sync.get('reminder_time', '08:00'),
+            },
+            timeout=3,
+        )
+    except Exception as e:
+        print(f"[syncUser] 同步失敗: {e}")
 
     # 0. 同步用戶資料到 Base44（背景進行）
     threading.Thread(target=lambda: sync_user_to_base44(user_id, profile.get('display_name', ''), profile), daemon=True).start()
