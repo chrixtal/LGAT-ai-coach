@@ -83,6 +83,86 @@ def init_db():
 
 init_db()
 
+
+# ============================
+# Base44 API 呼叫
+# ============================
+
+def sync_user_to_base44(user_id, display_name='', coach_tone='', coach_style='', quote_freq='', total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser OK | user={user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, text):
+    """偵測訊息中的目標/事件關鍵詞，並儲存"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '計畫', '夢想', '目的', '想達成', '短期', '中期', '長期']
+    # 事件關鍵詞
+    event_keywords = ['習慣', '打卡', '待辦', '里程碑', '完成', '做了', '做過']
+    
+    goal_match = any(kw in text for kw in goal_keywords)
+    event_match = any(kw in text for kw in event_keywords)
+    
+    if not goal_match and not event_match:
+        return
+    
+    try:
+        if goal_match:
+            # 簡易解析：取訊息前 50 字作為標題
+            title = text[:50].strip() if len(text) > 0 else '新目標'
+            resp = requests.post(
+                f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'description': text,
+                    'type': 'short',  # 預設短期
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] Goal saved | user={user_id}")
+        
+        if event_match:
+            title = text[:50].strip() if len(text) > 0 else '新事件'
+            resp = requests.post(
+                f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'type': 'todo',  # 預設待辦
+                    'note': text,
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] Event saved | user={user_id}")
+    except Exception as e:
+        print(f"[Base44] detect_and_save error: {e}")
+
 # ============================
 # DB helpers
 # ============================
@@ -497,34 +577,33 @@ def handle_message(event):
         current_profile = get_profile(user_id)
         
         try:
+            # 1. 同步用戶資料到 Base44
+            sync_user_to_base44(
+                user_id,
+                display_name=current_profile.get('display_name', ''),
+                coach_tone=current_profile.get('coach_tone', ''),
+                coach_style=current_profile.get('coach_style', ''),
+                quote_freq=current_profile.get('quote_freq', ''),
+                total_messages=(current_profile.get('total_messages', 0) or 0) + 1
+            )
+            
+            # 2. 偵測並儲存目標/事件
+            detect_and_save_goal_or_event(
+                user_id,
+                current_profile.get('display_name', ''),
+                user_text
+            )
+            
+            # 3. 呼叫 Dify 獲得回應
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
-            print(f"[ask_dify] 錯誤: {e}")
+            print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
         
-        # 只送一次回應
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
-        
-        # 背景同步用戶資料
-        try:
-            sync_user_to_base44(
-                user_id,
-                current_profile.get('display_name', ''),
-                current_profile.get('coach_tone', 'balanced'),
-                current_profile.get('coach_style', 'exploratory'),
-                current_profile.get('quote_freq', 'sometimes'),
-                (current_profile.get('total_messages') or 0) + 1
-            )
-        except Exception as e:
-            print(f"[sync] 錯誤: {e}")
-        
-        # 偵測並儲存目標/事件
-        try:
-            detect_and_save_goal_or_event(user_id, user_text, current_profile)
-        except Exception as e:
-            print(f"[detect] 錯誤: {e}")
+
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
