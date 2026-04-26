@@ -48,8 +48,9 @@ QUOTE_OPTIONS = _parse_options(os.environ.get(
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
     print("警告: 缺少必要的環境變數設定。請檢查 Zeabur 的 Variables。")
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
+# 用空字串兜底，避免環境變數 None 時 crash（會在 /health 顯示警告）
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN or 'MISSING')
+handler = WebhookHandler(LINE_CHANNEL_SECRET or 'MISSING')
 
 # --- SQLite 初始化 ---
 DB_PATH = os.environ.get('DB_PATH', '/data/lgat.db')
@@ -80,6 +81,16 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Migration：補缺少的欄位（舊 DB 升級用）
+    for sql in [
+        "ALTER TABLE user_profiles ADD COLUMN total_messages INTEGER DEFAULT 0",
+        "ALTER TABLE user_profiles ADD COLUMN reminder_enabled INTEGER DEFAULT 0",
+        "ALTER TABLE user_profiles ADD COLUMN reminder_time TEXT DEFAULT '08:00'",
+    ]:
+        try:
+            c.execute(sql)
+        except Exception:
+            pass  # 欄位已存在
     conn.commit()
     conn.close()
 
