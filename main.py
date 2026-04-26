@@ -80,6 +80,20 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Migration：補上可能缺少的欄位（舊版 DB 升級用）
+    migrations = [
+        "ALTER TABLE user_profiles ADD COLUMN total_messages INTEGER DEFAULT 0",
+        "ALTER TABLE user_profiles ADD COLUMN reminder_enabled INTEGER DEFAULT 0",
+        "ALTER TABLE user_profiles ADD COLUMN reminder_time TEXT DEFAULT '08:00'",
+    ]
+    for sql in migrations:
+        try:
+            c.execute(sql)
+            conn.commit()
+            print(f"[Migration] 執行成功: {sql}")
+        except sqlite3.OperationalError:
+            pass  # 欄位已存在，忽略
+
     conn.commit()
     conn.close()
 
