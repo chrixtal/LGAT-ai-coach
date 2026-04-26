@@ -609,6 +609,30 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 API 同步
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+SYNC_USER_ENDPOINT = f'{BASE44_API_URL}/functions/syncUser'
+SAVE_GOAL_ENDPOINT = f'{BASE44_API_URL}/functions/saveGoalOrEvent'
+
+def save_goal_or_event(entity_type, line_user_id, display_name, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        resp = requests.post(SAVE_GOAL_ENDPOINT, json={
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            **fields
+        }, timeout=5)
+        print(f"[Base44 Save] status={resp.status_code} | {entity_type} | user={line_user_id}")
+        return resp.json() if resp.ok else None
+    except Exception as e:
+        print(f"[Base44 Save] 失敗: {e}")
+        return None
+
 # ============================
 # LINE Webhook
 # ============================
