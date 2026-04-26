@@ -443,6 +443,99 @@ def _process_answer_tags(user_id, profile, answer):
     except Exception as e:
         print(f"[_process_answer_tags] 例外: {e}")
 
+
+# ============================
+# Base44 Backend 整合
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser 成功 | {line_user_id}")
+            return resp.json()
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 例外: {e}")
+    return None
+
+def save_goal_or_event_to_base44(entity_type, line_user_id, display_name, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                **fields
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] save {entity_type} 成功 | {line_user_id}")
+            return resp.json()
+        else:
+            print(f"[Base44] save {entity_type} 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] save {entity_type} 例外: {e}")
+    return None
+
+def parse_goal_or_event(text, profile):
+    """簡單的自然語言解析，偵測用戶是否在談論目標/事件
+    回傳 None 或 {'type': 'goal'/'event', 'title': '...', 'type': 'short'/'todo' 等}
+    """
+    text = text.lower()
+    
+    # 目標關鍵字
+    goal_keywords = ['目標', '目的', '想要', '計畫', '想達成', '想完成', '想學', '想做']
+    event_keywords = ['待辦', '任務', '習慣', '打卡', '提醒', '完成', '做了']
+    
+    # 簡單檢查
+    if any(kw in text for kw in goal_keywords):
+        # 嘗試抽出標題（簡單做法：取第一句或前 50 字）
+        title = text.split('\n')[0][:50] if text else '新目標'
+        goal_type = 'short'
+        if '月' in text:
+            goal_type = 'medium'
+        elif '年' in text or '長期' in text:
+            goal_type = 'long'
+        
+        return {
+            'type': 'goal',
+            'title': title,
+            'goal_type': goal_type,
+            'description': text,
+        }
+    
+    if any(kw in text for kw in event_keywords):
+        title = text.split('\n')[0][:50] if text else '新事件'
+        event_type = 'habit' if '習慣' in text or '打卡' in text else 'todo'
+        
+        return {
+            'type': 'event',
+            'title': title,
+            'event_type': event_type,
+            'note': text,
+        }
+    
+    return None
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -589,14 +682,45 @@ def handle_message(event):
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
-        # 更新本地 total_messages 並同步到 Base44
-        new_total = (current_profile.get('total_messages') or 0) + 1
-        save_profile(user_id, total_messages=new_total)
-        current_profile['total_messages'] = new_total
-        sync_user_to_base44(user_id, current_profile)
+        
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+            
+            # 同步用戶資料到 Base44
+            sync_user_to_base44(
+                user_id,
+                current_profile.get('display_name') or '',
+                current_profile.get('coach_tone') or 'balanced',
+                current_profile.get('coach_style') or 'exploratory',
+                current_profile.get('quote_freq') or 'sometimes',
+                (current_profile.get('total_messages') or 0) + 1
+            )
+            
+            # 解析是否有目標/事件關鍵字
+            parsed = parse_goal_or_event(user_text, current_profile)
+            if parsed:
+                if parsed['type'] == 'goal':
+                    save_goal_or_event_to_base44(
+                        'goal',
+                        user_id,
+                        current_profile.get('display_name') or '',
+                        title=parsed['title'],
+                        description=parsed.get('description', ''),
+                        type=parsed['goal_type'],
+                    )
+                    print(f"[Goal Detected] {parsed['title']} | {user_id}")
+                elif parsed['type'] == 'event':
+                    save_goal_or_event_to_base44(
+                        'event',
+                        user_id,
+                        current_profile.get('display_name') or '',
+                        title=parsed['title'],
+                        type=parsed['event_type'],
+                        note=parsed.get('note', ''),
+                    )
+                    print(f"[Event Detected] {parsed['title']} | {user_id}")
+
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
