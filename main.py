@@ -574,6 +574,80 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 整合
+# ============================
+
+def sync_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """同步用戶資料到 Base44"""
+    try:
+        base44_url = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+        resp = requests.post(
+            f'{base44_url}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=5
+        )
+        if resp.status_code != 200:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def save_goal_or_event_to_base44(entity_type, line_user_id, display_name, **fields):
+    """存目標或事件到 Base44"""
+    try:
+        base44_url = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+        resp = requests.post(
+            f'{base44_url}/functions/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                **fields
+            },
+            timeout=5
+        )
+        if resp.status_code != 200:
+            print(f"[Base44] saveGoalOrEvent 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] saveGoalOrEvent error: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, dify_response):
+    """解析 Dify 回應，偵測是否提到目標/事件"""
+    # 簡單的關鍵字偵測
+    goal_keywords = ['目標', '計劃', '想要', '希望達成', '要完成']
+    event_keywords = ['習慣', '待辦', '任務', '事項', '提醒']
+
+    for kw in goal_keywords:
+        if kw in dify_response:
+            # 嘗試從回應中提取目標資訊
+            save_goal_or_event_to_base44(
+                'goal',
+                line_user_id,
+                display_name,
+                title='自 Dify 回應辨識的目標',
+                description=dify_response[:100],  # 取前 100 字作為描述
+            )
+            break
+
+    for kw in event_keywords:
+        if kw in dify_response:
+            save_goal_or_event_to_base44(
+                'event',
+                line_user_id,
+                display_name,
+                title='自 Dify 回應辨識的事件',
+                type='todo',
+            )
+            break
+
 # ============================
 # LINE Webhook
 # ============================
