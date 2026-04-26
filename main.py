@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import requests
 from fastapi import FastAPI, Request, HTTPException
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
@@ -587,11 +588,78 @@ async def callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return 'OK'
 
+def sync_user_to_base44(user_id, profile):
+    """異步同步用戶資料到 Base44"""
+    try:
+        requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[Base44] syncUser 失敗: {e}")
+
+def detect_and_save_goal_or_event(user_id, text, profile):
+    """偵測用戶輸入是否包含目標或事件"""
+    try:
+        # 簡單的關鍵字偵測
+        goal_keywords = ['目標', '想要', '計畫', '要做', '希望', '夢想']
+        habit_keywords = ['習慣', '打卡', '每天', '每週', '養成']
+        todo_keywords = ['待辦', '要做', '記錄', '完成', '待']
+        
+        text_lower = text.lower()
+        
+        if any(kw in text for kw in goal_keywords):
+            # 偵測到目標
+            requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': text[:30],  # 取前 30 字作為標題
+                    'description': text,
+                    'type': 'short',  # 預設短期
+                },
+                timeout=5
+            )
+            print(f"[Base44] 已記錄目標: {text[:20]}")
+        elif any(kw in text for kw in habit_keywords):
+            # 偵測到習慣
+            requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': text[:30],
+                    'type': 'habit',
+                    'recurrence': 'daily',
+                },
+                timeout=5
+            )
+            print(f"[Base44] 已記錄習慣: {text[:20]}")
+    except Exception as e:
+        print(f"[Base44] 偵測目標/事件失敗: {e}")
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 同步用戶資料到 Base44
+    sync_user_to_base44(user_id, profile)
+    
+    # 偵測並記錄目標/事件
+    detect_and_save_goal_or_event(user_id, user_text, profile)
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
