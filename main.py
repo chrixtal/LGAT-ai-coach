@@ -9,6 +9,9 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+
+# --- Base44 API endpoint ---
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -305,6 +308,36 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44，讓後台可以追蹤和管理"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+                'reminder_enabled': False,  # 預設關閉，由後台開啟
+                'reminder_time': '08:00',
+                'plan': 'free',  # 預設免費版
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 同步成功 | user={user_id}")
+        else:
+            print(f"[Base44] 同步失敗 status={resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
