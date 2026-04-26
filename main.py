@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+from api_calls import sync_user_to_base44, save_goal_or_event
 
 app = FastAPI()
 
@@ -545,6 +546,15 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 同步用戶資料到 Base44（每次對話都更新 total_messages）
+    threading.Thread(
+        target=sync_user_to_base44,
+        args=(user_id, profile.get('display_name', ''), profile.get('coach_tone', 'balanced'),
+              profile.get('coach_style', 'exploratory'), profile.get('quote_freq', 'sometimes'),
+              (profile.get('total_messages', 0) or 0) + 1, profile.get('plan', 'free')),
+        daemon=True
+    ).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
