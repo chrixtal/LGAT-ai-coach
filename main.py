@@ -466,6 +466,68 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+def sync_user_to_base44(user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        requests.post(
+            SYNC_USER_API,
+            json={
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": profile.get('total_messages', 0) + 1,
+                "reminder_enabled": profile.get('reminder_enabled', False),
+                "reminder_time": profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[Base44 Sync] 失敗: {e}")
+
+def detect_and_save_goals_events(user_id, display_name, text):
+    """偵測目標/事件關鍵詞並自動儲存"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['想要', '目標', '計畫', '想達成', '短期', '中期', '長期']
+    
+    # 事件關鍵詞
+    event_keywords = ['打卡', '完成了', '做', '待辦', '習慣']
+    
+    try:
+        if any(kw in text_lower for kw in goal_keywords):
+            # 簡易解析目標
+            requests.post(
+                SAVE_GOAL_EVENT_API,
+                json={
+                    "entity_type": "goal",
+                    "line_user_id": user_id,
+                    "display_name": display_name,
+                    "title": text[:50],  # 用文本前 50 字做標題
+                    "description": text,
+                    "type": "short" if "短期" in text else ("medium" if "中期" in text else "long"),
+                },
+                timeout=5
+            )
+        
+        if any(kw in text_lower for kw in event_keywords):
+            requests.post(
+                SAVE_GOAL_EVENT_API,
+                json={
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": display_name,
+                    "title": text[:50],
+                    "type": "todo",
+                    "note": text,
+                },
+                timeout=5
+            )
+    except Exception as e:
+        print(f"[Goal/Event Detection] 失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -563,6 +625,14 @@ def handle_command(user_id, text, profile):
 # ============================
 
 app = FastAPI()
+
+
+# Base44 Backend URLs
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+SYNC_USER_API = f"{BASE44_API_URL}/functions/syncUser"
+SAVE_GOAL_EVENT_API = f"{BASE44_API_URL}/functions/saveGoalOrEvent"
+SEND_REMINDERS_API = f"{BASE44_API_URL}/functions/sendReminders"
 
 @app.post("/callback")
 async def callback(request: Request):
