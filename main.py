@@ -17,6 +17,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
@@ -254,7 +256,7 @@ BASE44_API_URL = f'https://app.base44.app/functions'
 def call_backend_function(function_name, payload):
     """呼叫 Base44 backend function"""
     try:
-        url = f'{BASE44_API_URL}/{function_name}'
+        url = f'{BASE44_API_URL}/functions/{function_name}'
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200:
             return response.json()
@@ -638,6 +640,56 @@ def sync_user_to_base44(line_user_id, profile):
             print(f"[syncUser] 同步失敗 status={resp.status_code}")
     except Exception as e:
         print(f"[syncUser] 錯誤: {e}")
+
+# ============================
+# Base44 API 呼叫（同步用戶、儲存目標/事件）
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        data = {
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "coach_tone": profile.get('coach_tone'),
+            "coach_style": profile.get('coach_style'),
+            "quote_freq": profile.get('quote_freq'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json=data,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser OK for {line_user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        data = {
+            "entity_type": entity_type,  # "goal" / "event" / "goal_progress"
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            **fields
+        }
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json=data,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] save{entity_type.capitalize()} OK for {line_user_id}")
+        else:
+            print(f"[Base44] save{entity_type.capitalize()} 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] save{entity_type.capitalize()} 錯誤: {e}")
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
