@@ -319,6 +319,93 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 同步和偵測（後台資料庫）
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_FUNCTIONS_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+def sync_user_and_detect(user_id: str, text: str, profile: dict):
+    """背景執行：同步用戶資料、偵測目標/事件、保存到後台"""
+    try:
+        # 1. 同步用戶基本資料
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0) + 1,
+        }
+        resp = requests.post(
+            f'{BASE44_FUNCTIONS_URL}/syncUser',
+            json=payload,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[syncUser] ✅ {user_id}")
+        else:
+            print(f"[syncUser] ❌ {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+    
+    # 2. 偵測目標/事件關鍵字
+    try:
+        goal_keywords = ['目標', '想要', '想達成', '我想', '計畫', 'goal']
+        event_keywords = ['今天', '明天', '完成', '做完', '習慣', '待辦', 'todo', 'habit']
+        
+        text_lower = text.lower()
+        
+        # 簡單的目標偵測
+        if any(kw in text for kw in goal_keywords):
+            # 嘗試從文本提取目標標題（簡單版）
+            if '想要' in text:
+                title = text.split('想要')[1].split('。')[0].strip() if '想要' in text else '新目標'
+            elif '目標' in text:
+                title = text.split('目標')[1].split('。')[0].strip() if '目標' in text else '新目標'
+            else:
+                title = text[:30]  # 前 30 字作為標題
+            
+            payload = {
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'title': title,
+                'type': 'short',  # 預設短期，用戶可後台調整
+            }
+            resp = requests.post(
+                f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[saveGoal] ✅ {title}")
+        
+        # 簡單的事件偵測
+        if any(kw in text for kw in event_keywords):
+            if '完成' in text or '做完' in text:
+                # 偵測到完成的事件
+                title = text.split('完成')[1].split('。')[0].strip() if '完成' in text else '已完成的事件'
+                payload = {
+                    'entity_type': 'goal_progress',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': title,
+                    'status': 'completed',
+                    'progress_note': f'用戶說：{text[:50]}',
+                }
+                resp = requests.post(
+                    f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent',
+                    json=payload,
+                    timeout=5
+                )
+                if resp.ok:
+                    print(f"[saveProgress] ✅ {title}")
+    except Exception as e:
+        print(f"[detect] 偵測失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
