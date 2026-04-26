@@ -17,6 +17,7 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+SATIR_API_KEY = os.environ.get('SATIR_API_KEY', '')  # 薩提爾冰山探索 Chatflow
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
@@ -77,6 +78,7 @@ def init_db():
             total_messages INTEGER DEFAULT 0,
             onboarding_done INTEGER DEFAULT 0,
             onboarding_step INTEGER DEFAULT 0,
+            satir_mode INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -86,6 +88,7 @@ def init_db():
         "ALTER TABLE user_profiles ADD COLUMN total_messages INTEGER DEFAULT 0",
         "ALTER TABLE user_profiles ADD COLUMN reminder_enabled INTEGER DEFAULT 0",
         "ALTER TABLE user_profiles ADD COLUMN reminder_time TEXT DEFAULT '08:00'",
+        "ALTER TABLE user_profiles ADD COLUMN satir_mode INTEGER DEFAULT 0",
     ]:
         try:
             c.execute(sql)
@@ -650,12 +653,12 @@ def sync_user_to_base44(line_user_id, profile):
     except Exception as e:
         print(f"[syncUser] 錯誤: {e}")
 
-def ask_dify(user_id, text, profile):
+def ask_dify(user_id, text, profile, api_key_override=None):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
     try:
-        result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
+        result = call_dify(api_key_override or DIFY_API_KEY, user_id, text, conversation_id, inputs)
         new_conv_id = result.get('conversation_id')
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
@@ -769,6 +772,16 @@ def handle_command(user_id, text, profile):
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
         return "⚙️ 好的！我們來重新調整一下～\n\n" + _tone_question()
 
+    if cmd in ['/satir', '冰山探索', '薩提爾']:
+        save_profile(line_user_id, satir_mode=1)
+        reset_conversation(line_user_id)
+        p = get_profile(line_user_id)
+        name = p.get('display_name') or '你'
+        return f'🌊 進入冰山探索模式，我是澄若水。\n\n{name}，最近有什麼讓你有情緒的事嗎？（輸入 /exit 可離開）'
+    if cmd in ['/exit', '結束探索']:
+        save_profile(line_user_id, satir_mode=0)
+        reset_conversation(line_user_id)
+        return '✅ 已回到一般教練模式 💪'
     if cmd == '/profile':
         name = profile.get('display_name') or '未設定'
         tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '未設定')
@@ -859,7 +872,9 @@ def handle_message(event):
         current_profile = get_profile(user_id)
         
         try:
-            ai_response = ask_dify(user_id, user_text, current_profile)
+            use_satir = current_profile.get('satir_mode', 0) and SATIR_API_KEY
+            ai_response = ask_dify(user_id, user_text, current_profile,
+                                   api_key_override=SATIR_API_KEY if use_satir else None)
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
