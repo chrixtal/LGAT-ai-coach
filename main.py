@@ -405,6 +405,26 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        requests.post(
+            "https://app-ffa38ee7.base44.app/functions/syncUser",
+            json={
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": (profile.get('total_messages') or 0) + 1,
+                "reminder_enabled": profile.get('reminder_enabled', False),
+                "reminder_time": profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[Base44 Sync] 失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -415,7 +435,10 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        answer = answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        # 背景同步用戶（非同步）
+        threading.Thread(target=sync_user_to_base44, args=(user_id, profile), daemon=True).start()
+        return answer
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
