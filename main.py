@@ -319,6 +319,51 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify inputs 組裝
 # ============================
 
+# ============================
+# Base44 Backend Functions 呼叫
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 資料庫"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/syncUser'
+        data = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', ''),
+            'coach_style': profile.get('coach_style', ''),
+            'quote_freq': profile.get('quote_freq', ''),
+            'total_messages': profile.get('total_messages', 0),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(url, json=data, timeout=5)
+        if resp.ok:
+            print(f"[syncUser] 同步成功 | user={user_id}")
+        else:
+            print(f"[syncUser] 失敗: {resp.text}")
+    except Exception as e:
+        print(f"[syncUser] 錯誤: {e}")
+
+def save_goal_or_event_to_base44(user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+        data = {
+            'entity_type': entity_type,
+            'line_user_id': user_id,
+            'display_name': display_name,
+            **fields
+        }
+        resp = requests.post(url, json=data, timeout=5)
+        if resp.ok:
+            print(f"[saveGoalOrEvent] 儲存成功 | user={user_id} | type={entity_type}")
+        else:
+            print(f"[saveGoalOrEvent] 失敗: {resp.text}")
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 錯誤: {e}")
+
+
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
