@@ -246,6 +246,57 @@ def send_loading_animation(user_id, seconds=20):
     except Exception as e:
         print(f"[LINE Loading] 失敗: {e}")
 
+
+# ============================
+# Base44 API 整合（資料同步）
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        resp = requests.post('https://app-ffa38ee7.base44.app/functions/syncUser', json={
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'coach_tone': coach_tone,
+            'coach_style': coach_style,
+            'quote_freq': quote_freq,
+            'total_messages': total_messages,
+        }, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser ✓ {line_user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def save_goal_to_base44(line_user_id, display_name, title, goal_type='short'):
+    """儲存目標到 Base44"""
+    try:
+        resp = requests.post('https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent', json={
+            'entity_type': 'goal',
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'title': title[:80],
+            'type': goal_type,
+        }, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] Goal saved: {title[:30]}")
+    except Exception as e:
+        print(f"[Base44] Goal error: {e}")
+
+def save_event_to_base44(line_user_id, display_name, title, event_type='todo'):
+    """儲存事件到 Base44"""
+    try:
+        resp = requests.post('https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent', json={
+            'entity_type': 'event',
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'title': title[:80],
+            'type': event_type,
+        }, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] Event saved: {title[:30]}")
+    except Exception as e:
+        print(f"[Base44] Event error: {e}")
+
 # ============================
 # 問卷 Onboarding
 # ============================
@@ -498,35 +549,15 @@ def _detect_and_save_goal_event(line_user_id, text, profile):
                 else:
                     goal_type = 'medium'
             
-            save_goal_or_event(
-                'goal',
-                line_user_id,
-                name,
-                title=title,
-                type=goal_type,
-                description=text
-            )
+            save_goal_to_base44(line_user_id, name, title, goal_type)
             print(f"[Goal] 已儲存: {title}")
         
         elif has_habit:
-            save_goal_or_event(
-                'event',
-                line_user_id,
-                name,
-                title=title,
-                type='habit',
-                recurrence='daily'
-            )
+            save_event_to_base44(line_user_id, name, title, 'habit')
             print(f"[Habit] 已儲存: {title}")
         
         elif has_todo:
-            save_goal_or_event(
-                'event',
-                line_user_id,
-                name,
-                title=title,
-                type='todo'
-            )
+            save_event_to_base44(line_user_id, name, title, 'todo')
             print(f"[Todo] 已儲存: {title}")
     except Exception as e:
         print(f"[detect_and_save] 異常: {e}")
