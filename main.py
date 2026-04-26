@@ -309,7 +309,88 @@ def handle_command(user_id, text, profile):
 # LINE Webhook
 # ============================
 
+
+# BASE44 API URL
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = f'https://app-ffa38ee7.base44.app/functions'
+
 app = FastAPI()
+
+
+# ============================
+# Base44 整合
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone') or 'balanced',
+                'coach_style': profile.get('coach_style') or 'exploratory',
+                'quote_freq': profile.get('quote_freq') or 'sometimes',
+                'total_messages': profile.get('total_messages', 0),
+            },
+            timeout=5
+        )
+        print(f"[Base44] syncUser 成功 | user={user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser 失敗: {e}")
+
+def detect_and_save_goal_or_event(user_id, text, profile):
+    """偵測用戶是否提到目標或事件，若有則自動儲存"""
+    # 簡單的關鍵字偵測
+    goal_keywords = ['目標', '想要', '想達成', '計畫', '想完成', '夢想', '想學', '想做']
+    event_keywords = ['習慣', '打卡', '待辦', '任務', '提醒', '日程', '約定']
+    
+    text_lower = text.lower()
+    
+    # 偵測是否是目標相關
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+    
+    if not (is_goal or is_event):
+        return
+    
+    try:
+        if is_goal:
+            # 簡單提取標題（假設用戶說的前 20 字內有目標標題）
+            title = text[:50] if len(text) <= 50 else text[:50] + '...'
+            requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name') or '',
+                    'title': title,
+                    'type': 'short',  # 預設短期，後續可改
+                    'description': text,
+                },
+                timeout=5
+            )
+            print(f"[Base44] 偵測到目標 | user={user_id} | {title}")
+        
+        elif is_event:
+            title = text[:50] if len(text) <= 50 else text[:50] + '...'
+            requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name') or '',
+                    'title': title,
+                    'type': 'todo',
+                    'note': text,
+                },
+                timeout=5
+            )
+            print(f"[Base44] 偵測到事件 | user={user_id} | {title}")
+    except Exception as e:
+        print(f"[Base44] 偵測/儲存失敗: {e}")
+
 
 @app.post("/callback")
 async def callback(request: Request):
