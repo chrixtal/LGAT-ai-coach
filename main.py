@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+from base44_client import sync_user, save_goal_or_event
 import re
 from datetime import datetime
 
@@ -459,6 +460,75 @@ def detect_and_save(line_user_id, display_name, text):
         if len(title) > 3:
             print(f"[Detect] Todo: {title}")
             save_event_to_base44(line_user_id, display_name, title, event_type='todo')
+
+
+# ============================
+# 目標/事件自動偵測與儲存
+# ============================
+
+def _detect_and_save_goal_event(line_user_id, text, profile):
+    """
+    偵測用戶輸入中是否有目標或事件關鍵詞，自動儲存到 Base44
+    例如：「我想完成跑步」→ 偵測到「完成」和「跑步」 → 儲存為一個目標或事件
+    """
+    name = profile.get('display_name', '用戶')
+    
+    # 關鍵詞定義
+    goal_keywords = ['目標', '想要', '計畫', '達成', '完成', '實現', '期望']
+    habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持']
+    todo_keywords = ['待辦', '要做', '明天', '今天', '下午', '早上']
+    
+    # 簡單的關鍵詞匹配（可以後期改成 NLP）
+    has_goal = any(kw in text for kw in goal_keywords)
+    has_habit = any(kw in text for kw in habit_keywords)
+    has_todo = any(kw in text for kw in todo_keywords)
+    
+    # 避免重複儲存，只在有明確的新內容時才存
+    # 提取內容（簡單做法：取文本中的實質部分）
+    title = text.strip()[:50]  # 取前 50 字
+    
+    try:
+        if has_goal and len(text) > 10:
+            # 判斷時間尺度（簡單判斷）
+            goal_type = 'short'  # 預設短期
+            if '月' in text or '年' in text:
+                if '年' in text:
+                    goal_type = 'long'
+                else:
+                    goal_type = 'medium'
+            
+            save_goal_or_event(
+                'goal',
+                line_user_id,
+                name,
+                title=title,
+                type=goal_type,
+                description=text
+            )
+            print(f"[Goal] 已儲存: {title}")
+        
+        elif has_habit:
+            save_goal_or_event(
+                'event',
+                line_user_id,
+                name,
+                title=title,
+                type='habit',
+                recurrence='daily'
+            )
+            print(f"[Habit] 已儲存: {title}")
+        
+        elif has_todo:
+            save_goal_or_event(
+                'event',
+                line_user_id,
+                name,
+                title=title,
+                type='todo'
+            )
+            print(f"[Todo] 已儲存: {title}")
+    except Exception as e:
+        print(f"[detect_and_save] 異常: {e}")
 
 # ============================
 # 指令處理
