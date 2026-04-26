@@ -481,6 +481,29 @@ def handle_message(event):
     # 3. 正常對話（背景執行）
     replied_flag = threading.Event()
 
+    def sync_to_base44():
+        """背景同步用戶資料到 Base44"""
+        try:
+            base44_url = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+            resp = requests.post(
+                f'{base44_url}/functions/syncUser',
+                json={
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name'),
+                    'coach_tone': profile.get('coach_tone'),
+                    'coach_style': profile.get('coach_style'),
+                    'quote_freq': profile.get('quote_freq'),
+                    'total_messages': (profile.get('total_messages') or 0) + 1,
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[syncUser] 同步成功 | user={user_id}")
+            else:
+                print(f"[syncUser] 狀態碼 {resp.status_code}")
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
@@ -535,6 +558,9 @@ def handle_message(event):
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=clean_response))
 
+    # 背景同步用戶資料
+    threading.Thread(target=sync_to_base44, daemon=True).start()
+    # 背景處理 Dify 回應
     threading.Thread(target=process_and_push, daemon=True).start()
 
 @app.get("/health")
