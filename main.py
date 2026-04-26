@@ -335,6 +335,105 @@ def ask_dify(user_id, text, profile):
         print(f"[Dify] 未預期錯誤: {e}")
         return "😵 我剛才靈魂出竅了一下，請再問我一次！\n\n如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
 
+
+# ============================
+# Backend API 調用
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def call_backend(endpoint, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/functions/{endpoint}'
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Backend] {endpoint} failed: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Backend] {endpoint} error: {e}")
+        return None
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0),
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+    }
+    result = call_backend('syncUser', payload)
+    if result:
+        print(f"[Sync] User {user_id} synced to Base44")
+    return result
+
+def detect_goal_in_text(text):
+    """簡單的目標偵測（關鍵字比對）"""
+    keywords = ['目標', '想要', '要', '計畫', '打算', '今天要', '這週要', '本月要', '長期目標']
+    if any(kw in text for kw in keywords):
+        # 很簡單的解析，實際可以用 NLP 改進
+        return {
+            "detected": True,
+            "title": text[:30],  # 用前 30 字當標題
+            "type": "short",  # 預設短期
+        }
+    return {"detected": False}
+
+def detect_event_in_text(text):
+    """事件偵測（待辦、習慣）"""
+    habit_kw = ['習慣', '每天', '每週', '打卡', '養成']
+    todo_kw = ['待辦', '要做', '記得', '明天']
+    
+    if any(kw in text for kw in habit_kw):
+        return {
+            "detected": True,
+            "type": "habit",
+            "title": text[:30],
+            "recurrence": "daily",
+        }
+    elif any(kw in text for kw in todo_kw):
+        return {
+            "detected": True,
+            "type": "todo",
+            "title": text[:30],
+        }
+    return {"detected": False}
+
+def save_goal_to_base44(user_id, display_name, goal_data):
+    """儲存目標到 Base44"""
+    payload = {
+        "entity_type": "goal",
+        "line_user_id": user_id,
+        "display_name": display_name,
+        "title": goal_data.get("title", "未命名"),
+        "type": goal_data.get("type", "short"),
+    }
+    result = call_backend('saveGoalOrEvent', payload)
+    if result:
+        print(f"[Goal] Saved for {user_id}: {goal_data.get('title')}")
+    return result
+
+def save_event_to_base44(user_id, display_name, event_data):
+    """儲存事件到 Base44"""
+    payload = {
+        "entity_type": "event",
+        "line_user_id": user_id,
+        "display_name": display_name,
+        "title": event_data.get("title", "未命名"),
+        "type": event_data.get("type", "todo"),
+        "recurrence": event_data.get("recurrence", "none"),
+    }
+    result = call_backend('saveGoalOrEvent', payload)
+    if result:
+        print(f"[Event] Saved for {user_id}: {event_data.get('title')}")
+    return result
+
 # ============================
 # 指令處理
 # ============================
@@ -422,10 +521,17 @@ def handle_message(event):
         # 同步到 Base44
         sync_user_to_base44(user_id, profile)
 
-        # 如果有目標關鍵字，額外偵測
-        if detect_goal_in_text(user_text):
-            # 這裡可以加更詳細的 NLP 來提取目標名稱
-            pass
+        # 偵測目標和事件
+        try:
+            goal_detect = detect_goal_in_text(user_text)
+            if goal_detect.get('detected'):
+                save_goal_to_base44(user_id, profile.get('display_name', ''), goal_detect)
+            
+            event_detect = detect_event_in_text(user_text)
+            if event_detect.get('detected'):
+                save_event_to_base44(user_id, profile.get('display_name', ''), event_detect)
+        except Exception as e:
+            print(f"[Detect] 偵測失敗: {e}")
 
         # Loading animation
         send_loading_animation(user_id, seconds=60)
