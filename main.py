@@ -10,6 +10,23 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+
+# ============================
+# Base44 Backend Function URLs
+# ============================
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_FUNCTIONS_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+def call_backend_function(function_name, data):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_FUNCTIONS_URL}/{function_name}'
+        resp = requests.post(url, json=data, timeout=10)
+        return resp.json() if resp.ok else None
+    except Exception as e:
+        print(f"[Backend] {function_name} 失敗: {e}")
+        return None
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -341,6 +358,80 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify inputs 組裝
 # ============================
 
+
+# ============================
+# 目標/事件自動偵測與儲存
+# ============================
+
+def detect_and_save_goal_or_event(user_id, user_input, ai_response, profile):
+    """
+    根據用戶輸入和 AI 回應，偵測並儲存目標/事件
+    支援的關鍵字：
+    - 目標：「我要...」「我想...」「目標是...」「計畫...」
+    - 事件：「今天...」「明天...」「完成了...」「做了...」
+    """
+    import re
+    
+    user_input_lower = user_input.lower()
+    response_lower = ai_response.lower()
+    combined = (user_input_lower + " " + response_lower).lower()
+    
+    # 目標關鍵字
+    goal_keywords = [
+        '我要', '我想', '目標是', '計畫', '想要', '目的',
+        '想達成', '要完成', '我的夢想', '我的目標'
+    ]
+    # 事件關鍵字
+    event_keywords = [
+        '今天', '明天', '這週', '這個月', '習慣', '每天',
+        '完成了', '做了', '開始', '準備', '打卡'
+    ]
+    
+    has_goal_keyword = any(kw in combined for kw in goal_keywords)
+    has_event_keyword = any(kw in combined for kw in event_keywords)
+    
+    if has_goal_keyword:
+        # 嘗試提取目標文字（簡單正則）
+        match = re.search(r'(我要|我想|計畫)([一-鿿\w\s]+?)([。，！？；]|$)', user_input)
+        title = match.group(2).strip() if match else user_input[:30]
+        
+        # 判斷是哪種目標（短中長期）
+        goal_type = 'short'
+        if any(w in combined for w in ['三個月', '半年', '中期', '六個月']):
+            goal_type = 'medium'
+        elif any(w in combined for w in ['一年', '長期', '長久', '永遠']):
+            goal_type = 'long'
+        
+        call_backend_function('saveGoalOrEvent', {
+            'entity_type': 'goal',
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', '用戶'),
+            'title': title,
+            'type': goal_type,
+        })
+        print(f"[Auto Save] 目標已儲存: {title}")
+    
+    elif has_event_keyword:
+        # 嘗試提取事件文字
+        match = re.search(r'(今天|明天|這週)([一-鿿\w\s]+?)([。，！？；]|$)', user_input)
+        title = match.group(2).strip() if match else user_input[:30]
+        
+        # 判斷是哪種事件
+        event_type = 'todo'
+        if any(w in combined for w in ['習慣', '每天', '每週']):
+            event_type = 'habit'
+        elif any(w in combined for w in ['里程碑', '重要', '達成']):
+            event_type = 'milestone'
+        
+        call_backend_function('saveGoalOrEvent', {
+            'entity_type': 'event',
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', '用戶'),
+            'title': title,
+            'type': event_type,
+        })
+        print(f"[Auto Save] 事件已儲存: {title}")
+
 def build_dify_inputs(profile):
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
@@ -485,6 +576,20 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 0. 背景同步用戶資料到 Base44
+    def sync_in_background():
+        call_backend_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name'),
+            'coach_tone': profile.get('coach_tone'),
+            'coach_style': profile.get('coach_style'),
+            'quote_freq': profile.get('quote_freq'),
+            'total_messages': (profile.get('total_messages') or 0) + 1,
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time'),
+        })
+    threading.Thread(target=sync_in_background, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
