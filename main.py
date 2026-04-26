@@ -484,6 +484,91 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 API 整合
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+        resp = requests.post(
+            f'{base44_url}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', ''),
+                'coach_style': profile.get('coach_style', ''),
+                'quote_freq': profile.get('quote_freq', ''),
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Sync] 用戶 {line_user_id} 同步成功")
+        else:
+            print(f"[Sync] 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Sync] 錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, entity_type, data):
+    """儲存目標或事件到 Base44 後台"""
+    try:
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+        profile = get_profile(line_user_id)
+        resp = requests.post(
+            f'{base44_url}/functions/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,  # goal / event / goal_progress
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                **data,
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Save] {entity_type} 儲存成功")
+        else:
+            print(f"[Save] 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Save] 錯誤: {e}")
+
+# ============================
+# 自動偵測關鍵字
+# ============================
+
+import re
+
+def detect_and_save_goal(line_user_id, ai_response):
+    """從 AI 回應中偵測目標設定"""
+    # 尋找 [GOAL] 標記（Dify 在識別到用戶想設定目標時在回應裡加）
+    goal_match = re.search(r'\[GOAL\]\s*([^\[]+)', ai_response)
+    if goal_match:
+        goal_text = goal_match.group(1).strip()
+        # 簡單解析：「標題|說明|期限」
+        parts = goal_text.split('|')
+        save_goal_or_event_to_base44(line_user_id, 'goal', {
+            'title': parts[0].strip() if parts else '新目標',
+            'description': parts[1].strip() if len(parts) > 1 else '',
+            'type': 'short',  # 預設短期，可由 AI 決定
+        })
+
+def detect_and_save_event(line_user_id, ai_response):
+    """從 AI 回應中偵測事件設定"""
+    # 尋找 [EVENT] 標記
+    event_match = re.search(r'\[EVENT\]\s*([^\[]+)', ai_response)
+    if event_match:
+        event_text = event_match.group(1).strip()
+        parts = event_text.split('|')
+        save_goal_or_event_to_base44(line_user_id, 'event', {
+            'title': parts[0].strip() if parts else '新事件',
+            'type': parts[1].strip() if len(parts) > 1 else 'todo',
+            'note': parts[2].strip() if len(parts) > 2 else '',
+        })
+
 # ============================
 # LINE Webhook
 # ============================
