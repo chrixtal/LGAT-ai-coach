@@ -184,6 +184,29 @@ def save_profile(line_user_id, **kwargs):
     conn.commit()
     conn.close()
 
+
+# ============================
+# BASE44 同步函數
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """異步將用戶資料同步到 BASE44"""
+    try:
+        data = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        url = f"{BASE44_API_URL}/functions/syncUser"
+        requests.post(url, json=data, timeout=5)
+    except Exception as e:
+        print(f"[BASE44] syncUser 失敗: {e}")
+
 # ============================
 # LINE helpers
 # ============================
@@ -301,6 +324,8 @@ def handle_onboarding(line_user_id, text, profile):
         save_profile(line_user_id, quote_freq=opt['value'], onboarding_done=1, onboarding_step=5)
 
         p = get_profile(line_user_id)
+        # 同步到 Base44
+        threading.Thread(target=lambda: sync_user_to_base44(line_user_id, p['display_name'], p['coach_tone'], p['coach_style'], p['quote_freq'], 1), daemon=True).start()
         name = p['display_name'] or '你'
         tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == p['coach_tone']), '')
         style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == p['coach_style']), '')
@@ -697,6 +722,12 @@ def handle_message(event):
 
     # 3. 正常 AI 對話
     replied_flag = threading.Event()
+    
+    # 同步用戶資料到 Base44（更新訊息計數）
+    profile['total_messages'] = (profile.get('total_messages', 0) or 0) + 1
+    save_profile(user_id, total_messages=profile['total_messages'])
+    threading.Thread(target=lambda: sync_user_to_base44(user_id, profile['display_name'], profile['coach_tone'], profile['coach_style'], profile['quote_freq'], profile['total_messages']), daemon=True).start()
+
 
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
