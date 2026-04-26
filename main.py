@@ -95,38 +95,9 @@ init_db()
 # ============================
 # DB helpers
 # ============================
-
-
-# ============================
-# Base44 API 整合（資料同步）
 # ============================
 
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
-
-def sync_user_to_base44(user_id, display_name, coach_tone=None, coach_style=None, quote_freq=None, total_messages=None):
-    """同步用戶資料到 Base44 LgatUser"""
-    try:
-        url = f'{BASE44_API_URL}/functions/syncUser'
-        data = {
-            'line_user_id': user_id,
-            'display_name': display_name,
-        }
-        if coach_tone: data['coach_tone'] = coach_tone
-        if coach_style: data['coach_style'] = coach_style
-        if quote_freq: data['quote_freq'] = quote_freq
-        if total_messages is not None: data['total_messages'] = total_messages
-        
-        resp = requests.post(url, json=data, timeout=5)
-        if resp.status_code == 200:
-            print(f"[Base44] ✅ 同步用戶 {display_name}")
-            return resp.json()
-        else:
-            print(f"[Base44] ❌ syncUser 失敗: {resp.status_code}")
-            return None
-    except Exception as e:
-        print(f"[Base44] ❌ syncUser 異常: {e}")
-        return None
-
 def save_goal_or_event(user_id, display_name, entity_type, **fields):
     """保存目標或事件到 Base44"""
     try:
