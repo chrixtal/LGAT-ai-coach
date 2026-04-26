@@ -8,6 +8,93 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+
+# ============================
+# Base44 API 整合（同步用戶、儲存目標/事件）
+# ============================
+
+BASE44_URL = "https://app-ffa38ee7.base44.app/functions"
+
+def sync_user_to_base44(user_id, profile, message_count):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_URL}/syncUser",
+            json={
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": message_count,
+                "reminder_enabled": profile.get('reminder_enabled', False),
+                "reminder_time": profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser 成功 | user={user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def save_goal_to_base44(user_id, title, goal_type="short"):
+    """儲存目標到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_URL}/saveGoalOrEvent",
+            json={
+                "entity_type": "goal",
+                "line_user_id": user_id,
+                "title": title,
+                "type": goal_type,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 目標已儲存 | {title}")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
+def save_event_to_base44(user_id, title, event_type="todo"):
+    """儲存事件到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_URL}/saveGoalOrEvent",
+            json={
+                "entity_type": "event",
+                "line_user_id": user_id,
+                "title": title,
+                "type": event_type,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 事件已儲存 | {title}")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
+def detect_goal_or_event(user_text):
+    """簡單的關鍵詞偵測"""
+    goal_keywords = ['目標', '想要', '要', '計畫', '目的', '期望', '夢想', '願望']
+    event_keywords = ['完成', '做', '打卡', '習慣', '待辦', '任務', '事項', '達成']
+
+    for kw in goal_keywords:
+        if kw in user_text:
+            return "goal", user_text[:30]
+    
+    for kw in event_keywords:
+        if kw in user_text:
+            return "event", user_text[:30]
+    
+    return None, None
+
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -470,6 +557,79 @@ def handle_command(user_id, text, profile):
 
     return None
 
+# ============================
+# Base44 後台同步
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone='', coach_style='', quote_freq='', total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        url = f'{BASE44_APP_URL}/functions/syncUser'
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+        }
+        if coach_tone:
+            payload['coach_tone'] = coach_tone
+        if coach_style:
+            payload['coach_style'] = coach_style
+        if quote_freq:
+            payload['quote_freq'] = quote_freq
+        if total_messages:
+            payload['total_messages'] = total_messages
+        
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] 同步用戶 {line_user_id} 成功")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def save_goal_or_event_to_base44(entity_type, line_user_id, display_name, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        url = f'{BASE44_APP_URL}/functions/saveGoalOrEvent'
+        payload = {
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+        }
+        payload.update(fields)
+        
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] 儲存 {entity_type} 成功: {display_name}")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
+def detect_goal_or_event(text):
+    """
+    簡單關鍵詞偵測，判斷是否該儲存目標或事件
+    回傳 (type, fields) 或 None
+    """
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想', '要', '計畫', '目的', '願望', '夢想', '希望', '決定']
+    event_keywords = ['完成', '做了', '今天', '明天', '這週', '每天', '習慣', '打卡', '提醒']
+    
+    # 判斷是否提及目標
+    if any(kw in text for kw in goal_keywords) and len(text) > 4:
+        # 簡單啟發式：包含動作+時間框架
+        if any(t in text for t in ['一個月', '三個月', '半年', '一年', '周', '天', '個月']):
+            return ('goal', {'title': text[:30], 'description': text})
+    
+    # 判斷是否完成事件
+    if any(kw in text for kw in event_keywords):
+        return ('event', {'title': text[:30], 'type': 'todo', 'note': text})
+    
+    return None
+
+# ============================
+# LINE Webhook
 # ============================
 # LINE Webhook
 # ============================
