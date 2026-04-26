@@ -96,6 +96,77 @@ init_db()
 # DB helpers
 # ============================
 
+
+# ============================
+# Base44 API 整合（資料同步）
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(user_id, display_name, coach_tone=None, coach_style=None, quote_freq=None, total_messages=None):
+    """同步用戶資料到 Base44 LgatUser"""
+    try:
+        url = f'{BASE44_API_URL}/functions/syncUser'
+        data = {
+            'line_user_id': user_id,
+            'display_name': display_name,
+        }
+        if coach_tone: data['coach_tone'] = coach_tone
+        if coach_style: data['coach_style'] = coach_style
+        if quote_freq: data['quote_freq'] = quote_freq
+        if total_messages is not None: data['total_messages'] = total_messages
+        
+        resp = requests.post(url, json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] ✅ 同步用戶 {display_name}")
+            return resp.json()
+        else:
+            print(f"[Base44] ❌ syncUser 失敗: {resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Base44] ❌ syncUser 異常: {e}")
+        return None
+
+def save_goal_or_event(user_id, display_name, entity_type, **fields):
+    """保存目標或事件到 Base44"""
+    try:
+        url = f'{BASE44_API_URL}/functions/saveGoalOrEvent'
+        data = {
+            'entity_type': entity_type,
+            'line_user_id': user_id,
+            'display_name': display_name,
+            **fields
+        }
+        resp = requests.post(url, json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] ✅ 保存{entity_type} {fields.get('title', '')}")
+            return resp.json()
+        else:
+            print(f"[Base44] ❌ saveGoalOrEvent 失敗: {resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Base44] ❌ saveGoalOrEvent 異常: {e}")
+        return None
+
+def detect_goal_or_event(text):
+    """簡易關鍵詞偵測"""
+    text_lower = text.lower()
+    goal_keywords = ['目標', '想要', '計畫', '打算', '想達成', '期望', '夢想']
+    todo_keywords = ['做', '完成', '要', '待辦', '待做']
+    habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持', '養成']
+    progress_keywords = ['完成了', '做完', '搞定', '達成', '成功']
+    
+    if any(kw in text_lower for kw in goal_keywords):
+        return {'detect': True, 'entity_type': 'goal', 'title': text[:30], 'type': 'short', 'description': text}
+    elif any(kw in text_lower for kw in progress_keywords):
+        return {'detect': True, 'entity_type': 'goal_progress', 'progress_note': text, 'status': 'completed' if '完成' in text_lower else None}
+    elif any(kw in text_lower for kw in habit_keywords):
+        return {'detect': True, 'entity_type': 'event', 'title': text[:30], 'type': 'habit', 'recurrence': 'daily', 'note': text}
+    elif any(kw in text_lower for kw in todo_keywords):
+        return {'detect': True, 'entity_type': 'event', 'title': text[:30], 'type': 'todo', 'note': text}
+    return {'detect': False}
+
+
 def get_conversation_id(line_user_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
