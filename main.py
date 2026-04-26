@@ -275,6 +275,11 @@ def handle_onboarding(line_user_id, text, profile):
 # ============================
 
 def build_dify_inputs(profile):
+    import datetime, zoneinfo
+    tz = zoneinfo.ZoneInfo("Asia/Taipei")
+    now = datetime.datetime.now(tz)
+    current_time = now.strftime("%Y年%m月%d日 %H:%M（%A）")
+
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
     quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '偶爾適時引用即可')
@@ -283,6 +288,7 @@ def build_dify_inputs(profile):
         "coach_tone": tone_dify,
         "coach_style": style_dify,
         "quote_freq": quote_dify,
+        "current_time": current_time,
     }
 
 # ============================
