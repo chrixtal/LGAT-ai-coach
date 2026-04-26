@@ -477,6 +477,51 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+def _try_detect_and_save(user_id, text, profile):
+    """偵測用戶訊息中的目標/事件關鍵詞，自動儲存到 Base44"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    text_lower = text.lower()
+    
+    goal_keywords = ['目標', '想要', '計畫', '想達成', '目的', '想完成']
+    event_keywords = ['今天', '明天', '完成了', '完成', '待辦', '習慣', '打卡']
+    
+    if any(kw in text_lower for kw in goal_keywords):
+        try:
+            requests.post(
+                f"{base44_api}/functions/saveGoalOrEvent",
+                json={
+                    "entity_type": "goal",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": text[:30],
+                    "description": text,
+                    "type": "short",
+                },
+                timeout=5
+            )
+            print(f"[detectGoal] 自動偵測並儲存 | user={user_id}")
+        except Exception as e:
+            print(f"[detectGoal] 失敗: {e}")
+    
+    if any(kw in text_lower for kw in event_keywords):
+        try:
+            requests.post(
+                f"{base44_api}/functions/saveGoalOrEvent",
+                json={
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": text[:30],
+                    "type": "todo",
+                    "status": "completed" if any(w in text_lower for w in ['完成了', '完成']) else "pending",
+                },
+                timeout=5
+            )
+            print(f"[detectEvent] 自動偵測並儲存 | user={user_id}")
+        except Exception as e:
+            print(f"[detectEvent] 失敗: {e}")
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
