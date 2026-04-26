@@ -31,6 +31,10 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
+# Base44 後台 API
+BASE44_SYNC_URL = "https://app-ffa38ee7.base44.app/functions/syncUser"
+BASE44_SAVE_URL = "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent"
+
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 MAINTENANCE_MODE = os.environ.get('MAINTENANCE_MODE', '0').strip() == '1'
 MAINTENANCE_MSG = os.environ.get('MAINTENANCE_MSG', '🔧 澄若水目前正在升級新功能中，暫時無法回覆。\n\n升級完成後我會主動通知你，請稍候！💪')
@@ -550,6 +554,32 @@ async def callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return 'OK'
 
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """非同步同步用戶到 Base44，失敗不影響主流程"""
+    def _do_sync():
+        try:
+            requests.post(
+                BASE44_SYNC_URL,
+                json={
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "coach_tone": profile.get('coach_tone', 'balanced'),
+                    "coach_style": profile.get('coach_style', 'exploratory'),
+                    "quote_freq": profile.get('quote_freq', 'sometimes'),
+                    "total_messages": profile.get('total_messages', 0),
+                },
+                timeout=5
+            )
+        except Exception as e:
+            print(f"[Base44 Sync] {e}")
+    
+    threading.Thread(target=_do_sync, daemon=True).start()
+
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
@@ -569,6 +599,8 @@ def handle_message(event):
         return
 
     # 3. 正常對話（背景執行）
+        sync_user_to_base44(user_id, profile)
+
     replied_flag = threading.Event()
 
     def sync_to_base44():
