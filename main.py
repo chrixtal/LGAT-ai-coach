@@ -358,6 +358,91 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Base44 同步 & 目標/事件解析
+# ============================
+
+BASE44_FUNCTIONS_URL = os.environ.get('BASE44_FUNCTIONS_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 LgatUser"""
+    try:
+        resp = requests.post(
+            f'{BASE44_FUNCTIONS_URL}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name'),
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 同步用戶成功: {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def parse_and_save_goal_or_event(line_user_id, display_name, ai_response):
+    """解析 AI 回應中的目標/事件標記並儲存"""
+    try:
+        # 檢查是否有 [GOAL] 標記
+        if '[GOAL]' in ai_response:
+            # 格式: [GOAL]type=short&title=XXX&description=YYY&target_date=YYYY-MM-DD[/GOAL]
+            import re
+            goal_match = re.search(r'\[GOAL\](.*?)\[/GOAL\]', ai_response)
+            if goal_match:
+                params = {}
+                for kv in goal_match.group(1).split('&'):
+                    k, v = kv.split('=', 1)
+                    params[k] = v
+                
+                resp = requests.post(
+                    f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'goal',
+                        'line_user_id': line_user_id,
+                        'display_name': display_name,
+                        **params
+                    },
+                    timeout=5
+                )
+                if resp.status_code == 200:
+                    print(f"[Base44] 目標已保存: {params.get('title', '?')}")
+                else:
+                    print(f"[Base44] 保存目標失敗: {resp.status_code}")
+        
+        # 檢查是否有 [EVENT] 標記
+        if '[EVENT]' in ai_response:
+            # 格式: [EVENT]type=habit&title=XXX&recurrence=daily&due_date=YYYY-MM-DD[/EVENT]
+            import re
+            event_match = re.search(r'\[EVENT\](.*?)\[/EVENT\]', ai_response)
+            if event_match:
+                params = {}
+                for kv in event_match.group(1).split('&'):
+                    k, v = kv.split('=', 1)
+                    params[k] = v
+                
+                resp = requests.post(
+                    f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'event',
+                        'line_user_id': line_user_id,
+                        'display_name': display_name,
+                        **params
+                    },
+                    timeout=5
+                )
+                if resp.status_code == 200:
+                    print(f"[Base44] 事件已保存: {params.get('title', '?')}")
+                else:
+                    print(f"[Base44] 保存事件失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 解析標記失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
