@@ -243,6 +243,96 @@ def _style_question():
 def _quote_question():
     return "❹ 最後一個問題！\n\n你喜歡我在對話中引用名言、學術理論或研究嗎？\n\n請輸入數字：\n" + _build_options_text(QUOTE_OPTIONS)
 
+
+# ============================
+# Base44 API 呼叫
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = f'https://app.base44.app/functions'
+
+def call_backend_function(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/{function_name}'
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"[Base44] {function_name} 失敗: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {function_name} 錯誤: {e}")
+        return None
+
+def sync_user_to_db(user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0),
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+    }
+    return call_backend_function('syncUser', payload)
+
+def detect_and_save_goal(user_id, display_name, text):
+    """偵測用戶是否提到目標，並儲存"""
+    # 簡單的關鍵字偵測
+    goal_keywords = ['目標', '目指す', '達成', '計畫', '想要', '要', '決定', '開始']
+    text_lower = text.lower()
+    
+    # 檢查是否包含目標相關關鍵字
+    has_goal_keyword = any(kw in text for kw in goal_keywords)
+    
+    if not has_goal_keyword:
+        return None
+    
+    # 簡單的目標偵測（可以後續改進）
+    # 尋找「我想...」「我要...」的句式
+    patterns = [
+        r'(我想|我要|我決定)(做|達成|完成|學|開始)(.+)',
+        r'(目標|計畫)是(.+)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            title = match.group(match.lastindex) if match.lastindex else text[:30]
+            payload = {
+                "entity_type": "goal",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": title.strip(),
+                "description": text[:100],
+                "type": "short",  # 預設短期，後續可優化
+            }
+            result = call_backend_function('saveGoalOrEvent', payload)
+            if result and result.get('ok'):
+                print(f"[Goal] 已儲存目標: {title}")
+            return result
+    
+    return None
+
+def detect_and_save_progress(user_id, display_name, text):
+    """偵測用戶是否更新進度"""
+    progress_keywords = ['完成', '做完', '達成', '進展', '進度', '正在', '已經']
+    
+    if not any(kw in text for kw in progress_keywords):
+        return None
+    
+    payload = {
+        "entity_type": "goal_progress",
+        "line_user_id": user_id,
+        "display_name": display_name,
+        "progress_note": text[:100],
+    }
+    return call_backend_function('saveGoalOrEvent', payload)
+
+
 def handle_onboarding(line_user_id, text, profile):
     if profile['onboarding_done']:
         return None
@@ -720,6 +810,14 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
+        # 同步用戶資料
+        profile["total_messages"] = profile.get("total_messages", 0) + 1
+        sync_user_to_db(user_id, profile)
+        
+        # 偵測並儲存目標/進度
+        detect_and_save_goal(user_id, profile.get("display_name", ""), user_text)
+        detect_and_save_progress(user_id, profile.get("display_name", ""), user_text)
+        
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
         
