@@ -391,6 +391,64 @@ def ask_dify(user_id, text, profile):
         return "😵 我出了點小問題，請再試一次！"
 
 # ============================
+# 目標/事件自動偵測
+# ============================
+
+def detect_and_save(user_id, text, profile):
+    """
+    偵測用戶訊息中的目標/事件關鍵字，自動儲存到 Base44
+    """
+    text_lower = text.lower()
+    display_name = profile.get('display_name', '')
+
+    # 目標關鍵字：「我想」「我的目標是」「設定目標」
+    goal_keywords = ['我想', '我的目標', '目標是', '設定目標', '計畫', '我要']
+    event_keywords = ['今天', '明天', '待辦', '習慣', '完成', '打卡', '里程碑']
+
+    # 簡單判斷（可後續改用 NLP）
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+
+    if is_goal and len(text) > 5:
+        # 儲存目標
+        try:
+            resp = requests.post(
+                f'{BASE44_API_BASE}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': text[:50],  # 用前 50 字作為目標標題
+                    'description': text,
+                    'type': 'short',  # 預設短期，後續可改
+                },
+                timeout=5
+            )
+            print(f"[saveGoal] {user_id}: {resp.status_code}")
+        except Exception as e:
+            print(f"[saveGoal] 失敗: {e}")
+
+    if is_event and len(text) > 5:
+        # 儲存事件
+        try:
+            resp = requests.post(
+                f'{BASE44_API_BASE}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': text[:50],
+                    'type': 'todo',
+                    'note': text,
+                },
+                timeout=5
+            )
+            print(f"[saveEvent] {user_id}: {resp.status_code}")
+        except Exception as e:
+            print(f"[saveEvent] 失敗: {e}")
+
+
+# ============================
 # 指令處理
 # ============================
 
@@ -476,14 +534,38 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
-        send_loading_animation(user_id, seconds=60)
+        # 1. 同步用戶資料到 Base44
         current_profile = get_profile(user_id)
+        try:
+            requests.post(
+                f'{BASE44_API_BASE}/syncUser',
+                json={
+                    'line_user_id': user_id,
+                    'display_name': current_profile.get('display_name', ''),
+                    'coach_tone': current_profile.get('coach_tone', ''),
+                    'coach_style': current_profile.get('coach_style', ''),
+                    'quote_freq': current_profile.get('quote_freq', ''),
+                    'total_messages': (current_profile.get('total_messages') or 0) + 1,
+                    'reminder_enabled': current_profile.get('reminder_enabled', False),
+                    'reminder_time': current_profile.get('reminder_time', ''),
+                },
+                timeout=5
+            )
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+
+        # 2. 偵測目標/事件關鍵字並自動儲存
+        detect_and_save(user_id, user_text, current_profile)
+
+        # 3. 送 loading animation，等 Dify 回應
+        send_loading_animation(user_id, seconds=60)
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
-
+        
+        # 4. 一次性發送回應
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
