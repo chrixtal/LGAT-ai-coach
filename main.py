@@ -419,6 +419,28 @@ def ask_dify(user_id, text, profile):
             "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
         )
 
+def sync_user_to_base44(user_id, profile):
+    """背景同步用戶資料到 Base44"""
+    try:
+        import os
+        BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+            },
+            timeout=5
+        )
+        print(f"[syncUser] status={resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+
 # ============================
 # 指令處理
 # ============================
