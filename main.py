@@ -350,6 +350,83 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 與 Base44 後台同步
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44 Sync] 用戶 {line_user_id} 同步完成")
+        else:
+            print(f"[Base44 Sync] 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, dify_response):
+    """從 Dify 回應偵測目標/事件並儲存"""
+    # 簡單的關鍵字偵測
+    lower_resp = dify_response.lower()
+    
+    # 檢查是否談論目標
+    goal_keywords = ['目標', '希望', '想要', '計畫', '夢想', '目的']
+    event_keywords = ['明天', '今天', '完成', '做', '習慣', '打卡', '記錄']
+    
+    if any(kw in lower_resp for kw in goal_keywords):
+        # 嘗試從回應中提取標題（簡單版本，只取前30字）
+        title = dify_response[:30].replace('\n', ' ')
+        try:
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'type': 'short',  # 預設短期
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 目標已儲存")
+            else:
+                print(f"[Base44] 目標儲存失敗: {resp.text}")
+        except Exception as e:
+            print(f"[Base44] 目標儲存錯誤: {e}")
+    
+    if any(kw in lower_resp for kw in event_keywords):
+        title = dify_response[:30].replace('\n', ' ')
+        try:
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'type': 'todo',
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 事件已儲存")
+        except Exception as e:
+            print(f"[Base44] 事件儲存錯誤: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -360,6 +437,16 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 後台同步：更新訊息計數
+        if answer:
+            profile['total_messages'] = profile.get('total_messages', 0) + 1
+            display_name = profile.get('display_name', '用戶')
+            # 背景執行同步（不阻塞回應）
+            threading.Thread(target=lambda: sync_user_to_base44(user_id, display_name, profile), daemon=True).start()
+            # 嘗試偵測目標/事件
+            threading.Thread(target=lambda: detect_and_save_goal_or_event(user_id, display_name, answer), daemon=True).start()
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
