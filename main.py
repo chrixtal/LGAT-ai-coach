@@ -2,7 +2,7 @@ import os
 import sqlite3
 import threading
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -17,14 +17,11 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
-
-# --- Base44 Backend API ---
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
-BASE44_API_BASE = f'https://app-ffa38ee7.base44.app/functions'
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
-# 教練設定（從環境變數讀取）
+# 教練設定
 # ============================
 def _parse_options(env_val):
     result = {}
@@ -50,7 +47,7 @@ QUOTE_OPTIONS = _parse_options(os.environ.get(
 ))
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
-    print("錯誤: 缺少必要的環境變數設定。")
+    print("錯誤: 缺少必要的環境變數")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -79,7 +76,7 @@ def init_db():
             quote_freq TEXT DEFAULT 'sometimes',
             onboarding_done INTEGER DEFAULT 0,
             onboarding_step INTEGER DEFAULT 0,
-            total_messages INTEGER DEFAULT 0,
+            message_count INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -138,7 +135,7 @@ def get_profile(line_user_id):
         'quote_freq': 'sometimes',
         'onboarding_done': 0,
         'onboarding_step': 0,
-        'total_messages': 0,
+        'message_count': 0,
     }
 
 def save_profile(line_user_id, **kwargs):
@@ -153,81 +150,18 @@ def save_profile(line_user_id, **kwargs):
     conn.commit()
     conn.close()
 
-# ============================
-# Base44 API 呼叫
-# ============================
-
-def call_base44_sync_user(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0, reminder_enabled=False, reminder_time=None, plan='free'):
-    """同步用戶資料到 Base44 後台"""
-    try:
-        payload = {
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'coach_tone': coach_tone,
-            'coach_style': coach_style,
-            'quote_freq': quote_freq,
-            'total_messages': total_messages,
-            'reminder_enabled': reminder_enabled,
-            'reminder_time': reminder_time,
-            'plan': plan,
-        }
-        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=payload, timeout=10)
-        if resp.ok:
-            print(f"[Base44] syncUser OK: {user_id}")
-            return True
-        else:
-            print(f"[Base44] syncUser failed: {resp.status_code}")
-    except Exception as e:
-        print(f"[Base44] syncUser error: {e}")
-    return False
-
-def call_base44_save_goal_or_event(user_id, display_name, entity_type, title, type_val, due_date=None, description=None):
-    """儲存目標或事件到 Base44"""
-    try:
-        payload = {
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'entity_type': entity_type,
-            'title': title,
-            'type': type_val,
-        }
-        if due_date:
-            payload['due_date'] = due_date
-        if description:
-            payload['description'] = description
-        resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=payload, timeout=10)
-        if resp.ok:
-            print(f"[Base44] save{entity_type} OK: {title}")
-            return True
-        else:
-            print(f"[Base44] save{entity_type} failed: {resp.status_code}")
-    except Exception as e:
-        print(f"[Base44] save{entity_type} error: {e}")
-    return False
-
-# ============================
-# 關鍵詞偵測
-# ============================
-
-def detect_goal_or_event(text):
-    """偵測用戶是否在設定目標或事件"""
-    text = text.lower()
-    
-    goal_keywords = ['目標', '想要', '想達成', '希望', '計畫', '打算', '計划', '規劃']
-    event_keywords = ['習慣', '要做', '待辦', '任務', '完成', '做完', '打卡', '記錄', '需要', '明天', '今天']
-    
-    if any(kw in text for kw in goal_keywords):
-        return 'goal'
-    elif any(kw in text for kw in event_keywords):
-        return 'event'
-    return None
+def increment_message_count(line_user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('UPDATE user_profiles SET message_count = message_count + 1, updated_at = CURRENT_TIMESTAMP WHERE line_user_id = ?', (line_user_id,))
+    conn.commit()
+    conn.close()
 
 # ============================
 # LINE helpers
 # ============================
 
 def get_line_display_name(user_id):
-    """從 LINE API 抓用戶暱稱"""
     try:
         profile = line_bot_api.get_profile(user_id)
         return profile.display_name or ''
@@ -236,7 +170,6 @@ def get_line_display_name(user_id):
         return ''
 
 def send_loading_animation(user_id, seconds=20):
-    """呼叫 LINE loading animation API"""
     try:
         resp = requests.post(
             'https://api.line.me/v2/bot/chat/loading/start',
@@ -250,6 +183,33 @@ def send_loading_animation(user_id, seconds=20):
         print(f"[LINE Loading] status={resp.status_code}")
     except Exception as e:
         print(f"[LINE Loading] 失敗: {e}")
+
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('message_count', 0),
+                'plan': 'free',
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶同步成功: {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
 
 # ============================
 # 問卷 Onboarding
@@ -269,7 +229,6 @@ def _quote_question():
     return "❹ 最後一個問題！\n\n你喜歡我在對話中引用名言、學術理論或研究嗎？\n\n請輸入數字：\n" + _build_options_text(QUOTE_OPTIONS)
 
 def handle_onboarding(line_user_id, text, profile):
-    """回傳 None 表示 onboarding 已完成；回傳字串表示進行中"""
     if profile['onboarding_done']:
         return None
 
@@ -346,6 +305,11 @@ def handle_onboarding(line_user_id, text, profile):
 # ============================
 
 def build_dify_inputs(profile):
+    import datetime, zoneinfo
+    tz = zoneinfo.ZoneInfo("Asia/Taipei")
+    now = datetime.datetime.now(tz)
+    current_time = now.strftime("%Y年%m月%d日 %H:%M（%A）")
+
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
     quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '偶爾適時引用即可')
@@ -354,10 +318,11 @@ def build_dify_inputs(profile):
         "coach_tone": tone_dify,
         "coach_style": style_dify,
         "quote_freq": quote_dify,
+        "current_time": current_time,
     }
 
 # ============================
-# Dify API 呼叫（含備援）
+# Dify API 呼叫
 # ============================
 
 def call_dify(api_key, user_id, text, conversation_id, inputs):
@@ -470,36 +435,6 @@ def handle_command(user_id, text, profile):
 
     return None
 
-
-# ============================
-# Base44 Backend Function 呼叫
-# ============================
-
-def call_backend_function(func_name: str, payload: dict) -> dict:
-    """呼叫 Base44 backend function（sync_user, save_goal_or_event 等）"""
-    try:
-        url = f'{BASE44_API_BASE}/{func_name}'
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print(f"[Base44] {func_name} 呼叫失敗: {e}")
-        return {}
-
-def sync_user_to_base44(user_id: str, profile: dict, message_count: int = 0):
-    """同步用戶資料到 Base44（每次對話都呼叫）"""
-    try:
-        call_backend_function('syncUser', {
-            'line_user_id': user_id,
-            'display_name': profile.get('display_name', ''),
-            'coach_tone': profile.get('coach_tone', 'balanced'),
-            'coach_style': profile.get('coach_style', 'exploratory'),
-            'quote_freq': profile.get('quote_freq', 'sometimes'),
-            'total_messages': message_count,
-        })
-    except Exception as e:
-        print(f"[Base44] sync_user_to_base44 失敗: {e}")
-
 # ============================
 # LINE Webhook
 # ============================
@@ -520,18 +455,13 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
 
-    # 同步用戶到 Base44
-    msg_count = (profile.get('total_messages', 0) or 0) + 1
-    save_profile(user_id, total_messages=msg_count)
-    sync_user_to_base44(user_id, get_profile(user_id), msg_count)
-
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=command_response))
         return
 
-    # 2. Onboarding 問卷（新用戶）
+    # 2. Onboarding 問卷
     onboarding_response = handle_onboarding(user_id, user_text, profile)
     if onboarding_response is not None:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
@@ -541,50 +471,21 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
-        # 發 loading animation
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
-
-        # 同步用戶資料到 Base44
-        call_base44_sync_user(
-            user_id,
-            current_profile.get('display_name') or '未設定',
-            current_profile.get('coach_tone', 'balanced'),
-            current_profile.get('coach_style', 'exploratory'),
-            current_profile.get('quote_freq', 'sometimes'),
-            total_messages=(current_profile.get('total_messages') or 0) + 1,
-        )
-
-        # 呼叫 Dify
         try:
+            # 同步用戶資料到 Base44
+            sync_user_to_base44(user_id, current_profile)
+            # 計數加一
+            increment_message_count(user_id)
+            # 取得 AI 回應
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
-
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
-
-        # 偵測並儲存目標/事件
-        entity_type = detect_goal_or_event(user_text)
-        if entity_type == 'goal':
-            call_base44_save_goal_or_event(
-                user_id,
-                current_profile.get('display_name') or '未設定',
-                'goal',
-                user_text[:100],
-                'short',
-                description=user_text
-            )
-        elif entity_type == 'event':
-            call_base44_save_goal_or_event(
-                user_id,
-                current_profile.get('display_name') or '未設定',
-                'event',
-                user_text[:100],
-                'todo'
-            )
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
