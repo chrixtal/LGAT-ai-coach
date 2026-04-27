@@ -425,6 +425,79 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# Base44 Backend Integration
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://api.base44.com/functions')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+
+def call_backend(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/{function_name}'
+        resp = requests.post(url, json=payload, timeout=10)
+        return resp.json() if resp.ok else None
+    except Exception as e:
+        print(f"[Backend] {function_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(user_id, profile):
+    """每次對話時同步用戶資料到 Base44"""
+    call_backend('syncUser', {
+        'line_user_id': user_id,
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', 'balanced'),
+        'coach_style': profile.get('coach_style', 'exploratory'),
+        'quote_freq': profile.get('quote_freq', 'sometimes'),
+        'total_messages': profile.get('total_messages', 0) + 1,
+        'reminder_enabled': profile.get('reminder_enabled', False),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+    })
+
+def detect_and_save_goal_or_event(user_id, display_name, text, ai_response):
+    """
+    從 AI 回應中偵測是否有目標/事件被提到，並自動儲存
+    
+    關鍵詞：
+    - 目標: "目標", "想", "計畫", "達成", "完成"
+    - 事件: "習慣", "待辦", "里程碑", "記錄"
+    """
+    goal_keywords = ['目標', '想', '計畫', '達成', '完成目標', '我要']
+    event_keywords = ['習慣', '待辦', '裡程碑', '打卡', '記錄', '任務']
+    
+    user_text_lower = text.lower()
+    response_text = ai_response.lower()
+    combined = user_text_lower + response_text
+    
+    # 簡單的啟發式偵測（實際應該用 NLP）
+    has_goal = any(kw in combined for kw in goal_keywords)
+    has_event = any(kw in combined for kw in event_keywords)
+    
+    if has_goal:
+        # 嘗試從文本中抽取目標資訊
+        # 這裡簡化成直接用用戶輸入作為標題
+        call_backend('saveGoalOrEvent', {
+            'entity_type': 'goal',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': text[:50],  # 前 50 個字
+            'description': ai_response[:100],
+            'type': 'short',  # 預設短期，可由用戶後續調整
+        })
+    
+    if has_event:
+        call_backend('saveGoalOrEvent', {
+            'entity_type': 'event',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': text[:50],
+            'type': 'todo',  # 預設待辦
+            'note': ai_response[:100],
+        })
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -576,9 +649,10 @@ def handle_message(event):
             sync_user_to_base44(user_id, current_profile)
             
             # 自動偵測並儲存目標/事件
-            detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), user_text)
+            # 先呼叫 Dify 獲得回應
             
             ai_response = ask_dify(user_id, user_text, current_profile)
+            detect_and_save_goal_or_event(user_id, current_profile.get("display_name", ""), user_text, ai_response)
             if not replied_flag.is_set():
                 replied_flag.set()
                 line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
