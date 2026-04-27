@@ -267,34 +267,34 @@ def ask_dify(uid, text, profile):
 
 # ====== 目標/事件偵測 ======
 def detect_and_save_goal_or_event(uid, display_name, user_input, ai_response):
-    """簡單的關鍵詞偵測，自動儲存目標/事件到後台"""
-    goal_kws = ['目標', '想要', '希望', '想達成', '計畫', '長期', '短期', '中期', '我要']
-    event_kws = ['習慣', '打卡', '待辦', '里程碑', '任務', '完成', '做完']
-    
-    has_goal = any(kw in user_input for kw in goal_kws)
-    has_event = any(kw in user_input for kw in event_kws)
-    
-    if has_goal:
-        title = user_input.split('\n')[0][:50] if user_input else '未命名目標'
-        save_goal_event_to_base44(uid, display_name, 'goal', title=title, type='short')
-        print(f"[Auto Save] 新目標: {title}")
-    elif has_event:
-        title = user_input.split('\n')[0][:50] if user_input else '未命名事件'
-        save_goal_event_to_base44(uid, display_name, 'event', title=title, type='todo')
-        print(f"[Auto Save] 新事件: {title}")
-
-# ====== LINE Webhook ======
-@app.post("/callback")
-async def callback(request: Request):
-    signature = request.headers.get('X-Line-Signature', '')
-    body = await request.body()
+    """從 Dify 回應中偵測 [GOAL:...] 和 [EVENT:...] 標記，自動儲存到後台"""
     try:
-        handler.handle(body.decode('utf-8'), signature)
-    except InvalidSignatureError:
-        raise HTTPException(status_code=400, detail="Invalid signature")
-    return 'OK'
+        # 偵測 [GOAL:title|description|type] 標記
+        goal_pattern = r'\[GOAL:([^|]+)\|([^|]*)\|([^|]*)\]'
+        goal_matches = re.finditer(goal_pattern, ai_response)
+        for match in goal_matches:
+            title, desc, goal_type = match.groups()
+            save_goal_event_to_base44(uid, display_name, 'goal',
+                title=title.strip(),
+                description=desc.strip(),
+                type=goal_type.strip() or 'short'
+            )
+            print(f"[Auto Save Goal] {title} ({goal_type or 'short'})")
+        
+        # 偵測 [EVENT:title|type] 標記
+        event_pattern = r'\[EVENT:([^|]+)\|([^|]*)\]'
+        event_matches = re.finditer(event_pattern, ai_response)
+        for match in event_matches:
+            title, event_type = match.groups()
+            save_goal_event_to_base44(uid, display_name, 'event',
+                title=title.strip(),
+                type=event_type.strip() or 'todo'
+            )
+            print(f"[Auto Save Event] {title} ({event_type or 'todo'})")
+    except Exception as e:
+        print(f"[Detect] 偵測失敗: {e}")
 
-@handler.add(MessageEvent, message=TextMessage)
+
 def handle_message(event):
     uid = event.source.user_id
     text = event.message.text
