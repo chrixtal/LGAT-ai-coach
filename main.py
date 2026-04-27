@@ -94,18 +94,6 @@ def save_profile(uid, **kwargs):
     conn.close()
 
 # ====== 後台同步 ======
-def sync_user_to_base44(uid, profile):
-    """同步用戶資料到 Base44 後台"""
-    try:
-        requests.post(f'{BASE44_URL}/functions/syncUser', json={
-            'line_user_id': uid,
-            'display_name': profile.get('display_name', ''),
-            'coach_tone': profile.get('coach_tone', 'balanced'),
-            'coach_style': profile.get('coach_style', 'exploratory'),
-            'quote_freq': profile.get('quote_freq', 'sometimes'),
-        }, timeout=5)
-    except Exception as e:
-        print(f"[Sync] 失敗: {e}")
 
 def save_goal_event_to_base44(uid, display_name, entity_type, **fields):
     """儲存目標或事件到後台"""
@@ -242,7 +230,7 @@ def call_dify(api_key, uid, text, conv_id, inputs):
 # Base44 API 串接
 # ============================
 
-def sync_user_to_base44(line_user_id, profile):
+def sync_user_to_base44(line_user_id, profile, total_messages=None):
     """同步用戶資料到 Base44"""
     base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
     url = f'{base44_url}/functions/syncUser'
@@ -253,7 +241,7 @@ def sync_user_to_base44(line_user_id, profile):
         'coach_tone': profile.get('coach_tone', 'balanced'),
         'coach_style': profile.get('coach_style', 'exploratory'),
         'quote_freq': profile.get('quote_freq', 'sometimes'),
-        'total_messages': profile.get('total_messages', 0) + 1,
+        'total_messages': total_messages if total_messages is not None else (profile.get('total_messages', 0) + 1),
         'reminder_enabled': profile.get('reminder_enabled', False),
         'reminder_time': profile.get('reminder_time', '08:00'),
     }
@@ -409,14 +397,16 @@ def handle_message(event):
         send_loading_animation(uid, seconds=60)
         current_profile = get_profile(uid)
         
-        # 同步用戶
-        sync_user_to_base44(uid, current_profile)
-        
         # 呼叫 Dify
         ai_response = ask_dify(uid, text, current_profile)
         
-        # 偵測並儲存目標/事件
-        detect_and_save_goal_or_event(uid, current_profile.get('display_name', ''), text, ai_response)
+        # 計數訊息 + 同步用戶到 Base44
+        message_count = (current_profile.get('total_messages', 0) or 0) + 1
+        sync_user_to_base44(uid, current_profile, total_messages=message_count)
+        
+        # 偵測並儲存目標/事件（只在有回應時）
+        if ai_response:
+            detect_and_save_goal_or_event(uid, current_profile.get('display_name', ''), text, ai_response)
         
         if not replied_flag.is_set():
             replied_flag.set()
