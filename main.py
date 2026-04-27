@@ -211,6 +211,54 @@ def sync_user_to_base44(line_user_id, profile):
     except Exception as e:
         print(f"[Base44] 同步錯誤: {e}")
 
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """自動偵測用戶輸入中的目標/事件關鍵詞，並儲存到 Base44"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['想要', '目標', '希望', '計畫', '要', '想', '完成', '達成', '學習', '練習']
+    # 事件關鍵詞
+    event_keywords = ['完成', '做', '打卡', '記錄', '今天', '明天', '後天', '每天', '每週']
+    
+    goal_matched = any(kw in text_lower for kw in goal_keywords)
+    event_matched = any(kw in text_lower for kw in event_keywords)
+    
+    # 過濾掉太短的輸入或純指令
+    if len(text) < 5 or text.startswith('/'):
+        return
+    
+    # 若同時匹配，優先作為 goal
+    entity_type = None
+    if goal_matched and any(long_kw in text_lower for long_kw in ['想要', '目標', '計畫']):
+        entity_type = 'goal'
+    elif event_matched:
+        entity_type = 'event'
+    else:
+        return
+    
+    try:
+        # 呼叫 saveGoalOrEvent API
+        resp = requests.post(
+            f'{BASE44_API_URL}/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': text[:50],  # 前 50 字作為標題
+                'description': text,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 儲存 {entity_type}: {text[:30]}...")
+        else:
+            print(f"[Base44] 儲存失敗 {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
+# ============================
+# 問卷 Onboarding
 # ============================
 # 問卷 Onboarding
 # ============================
@@ -476,6 +524,8 @@ def handle_message(event):
         try:
             # 同步用戶資料到 Base44
             sync_user_to_base44(user_id, current_profile)
+            # 嘗試偵測並儲存目標/事件
+            detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), user_text)
             # 計數加一
             increment_message_count(user_id)
             # 取得 AI 回應
