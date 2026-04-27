@@ -456,6 +456,42 @@ def sync_user_to_base44(user_id: str, profile: dict):
     except Exception as e:
         print(f"[Base44 Sync] 錯誤: {e}")
 
+# ============================
+# Base44 同步
+# ============================
+
+def sync_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44，供後台管理和主動提醒使用"""
+    BASE44_API = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{BASE44_API}/functions/syncUser'
+    
+    # 從 SQLite 讀目前的總訊息數
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT COALESCE(SUM(1), 0) FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
+    total_msg = c.fetchone()[0] + 1  # +1 表示現在這則訊息
+    conn.close()
+    
+    payload = {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name') or '',
+        'coach_tone': profile.get('coach_tone') or 'balanced',
+        'coach_style': profile.get('coach_style') or 'exploratory',
+        'quote_freq': profile.get('quote_freq') or 'sometimes',
+        'total_messages': total_msg,
+        'plan': 'free',  # 免費版預設
+    }
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[syncUser] 成功 | user={line_user_id}")
+        else:
+            print(f"[syncUser] HTTP {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -579,6 +615,13 @@ def handle_message(event):
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
+        
+        # 1. 同步用戶資料到 Base44
+        try:
+            sync_to_base44(user_id, current_profile)
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+        
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
