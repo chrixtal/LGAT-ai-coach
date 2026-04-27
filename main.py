@@ -1,8 +1,10 @@
 import os
 import sqlite3
 import threading
+import json
 import requests
 from fastapi import FastAPI, Request, HTTPException
+from datetime import datetime, timezone, timedelta
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
@@ -448,10 +450,24 @@ def handle_message(event):
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
-        ai_response = ask_dify(user_id, user_text, current_profile)
         
-        # 後台同步用戶資料（完成對話後）
+        # 增加訊息計數
+        msg_count = (current_profile.get('total_messages') or 0) + 1
+        save_profile(user_id, total_messages=msg_count)
+        current_profile['total_messages'] = msg_count
+        
+        # 呼叫 Dify 取得 AI 回應
+        try:
+            ai_response = ask_dify(user_id, user_text, current_profile)
+        except Exception as e:
+            print(f"[handle_message] ask_dify 錯誤: {e}")
+            ai_response = "😵 出了點小問題，請再試一次！"
+        
+        # 後台同步用戶資料
         sync_user_to_base44(user_id, current_profile)
+        
+        # 嘗試偵測並儲存目標/事件（簡單版）
+        detect_and_save_goals_events(user_id, current_profile.get('display_name', ''), user_text, ai_response)
         
         if not replied_flag.is_set():
             replied_flag.set()
