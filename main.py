@@ -2,11 +2,30 @@ import os
 import sqlite3
 import threading
 import requests
+import json
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+
+# Base44 後端 API
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+def call_backend_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/{func_name}'
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.ok:
+            return resp.json()
+        else:
+            print(f"[Backend] {func_name} failed: {resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Backend] {func_name} error: {e}")
+        return None
 from datetime import datetime, timezone, timedelta
 
 app = FastAPI()
@@ -521,6 +540,19 @@ def handle_message(event):
         ).start()
 
     threading.Thread(target=process_and_push, daemon=True).start()
+
+    # 同步用戶資料到 Base44
+    threading.Thread(
+        target=lambda: call_backend_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', ''),
+            'coach_style': profile.get('coach_style', ''),
+            'quote_freq': profile.get('quote_freq', ''),
+            'total_messages': (profile.get('total_messages', 0) or 0) + 1,
+        }),
+        daemon=True
+    ).start()
 
 def sync_message_stats(user_id, user_text, ai_response, profile):
     """背景同步：統計訊息、偵測並記錄目標/事件"""
