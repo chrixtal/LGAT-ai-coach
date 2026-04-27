@@ -424,6 +424,53 @@ def _save_goal_or_event(line_user_id, entity_type, **kwargs):
         print(f"[Base44 save] 錯誤: {e}")
 
 
+def _detect_and_save_goal_event(user_id, display_name, response):
+    """偵測 Dify 回應中的 [GOAL] 或 [EVENT] 標記，自動儲存到 Base44"""
+    import re
+    
+    # 偵測 [GOAL:title|description|type] 標記
+    goal_pattern = r'\[GOAL:([^|]+)\|([^|]*)\|([^\]]+)\]'
+    goals = re.findall(goal_pattern, response)
+    for title, desc, gtype in goals:
+        try:
+            requests.post(
+                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'description': desc.strip(),
+                    'type': gtype.strip() or 'short',
+                },
+                timeout=5
+            )
+            print(f"[Goal Saved] {title} ({gtype})")
+        except Exception as e:
+            print(f"[Goal Save] 錯誤: {e}")
+    
+    # 偵測 [EVENT:title|type|recurrence] 標記
+    event_pattern = r'\[EVENT:([^|]+)\|([^|]*)\|([^\]]+)\]'
+    events = re.findall(event_pattern, response)
+    for title, etype, recur in events:
+        try:
+            requests.post(
+                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'type': etype.strip() or 'todo',
+                    'recurrence': recur.strip() or 'none',
+                },
+                timeout=5
+            )
+            print(f"[Event Saved] {title} ({etype})")
+        except Exception as e:
+            print(f"[Event Save] 錯誤: {e}")
+
+
 def ask_dify(user_id, text, profile):
     # 先同步用戶資料到 Base44
     try:
