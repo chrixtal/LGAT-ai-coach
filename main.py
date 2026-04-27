@@ -612,3 +612,74 @@ def sync_to_base44(line_user_id, profile):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# ============================
+# LINE Webhook & Handler
+# ============================
+
+@app.post("/callback")
+async def callback(request: Request):
+    signature = request.headers.get('X-Line-Signature', '')
+    body = await request.body()
+    try:
+        handler.handle(body.decode('utf-8'), signature)
+    except InvalidSignatureError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    user_id = event.source.user_id
+    user_text = event.message.text
+    profile = get_profile(user_id)
+
+    # 1. 指令優先
+    command_response = handle_command(user_id, user_text, profile)
+    if command_response:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=command_response))
+        return
+
+    # 2. Onboarding 問卷（新用戶）
+    onboarding_response = handle_onboarding(user_id, user_text, profile)
+    if onboarding_response is not None:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
+        return
+
+    # 3. 正常 AI 對話 + 資料同步
+    replied_flag = threading.Event()
+
+    def process_and_push():
+        try:
+            # 立刻顯示 loading animation
+            send_loading_animation(user_id, seconds=60)
+            
+            current_profile = get_profile(user_id)
+            
+            # 同步用戶資料到 Base44
+            sync_user_to_base44(user_id, current_profile)
+            
+            # 嘗試自動偵測並儲存目標/事件
+            detect_and_save_goal_or_event(user_id, current_profile, user_text)
+            
+            # 呼叫 Dify AI 回應
+            ai_response = ask_dify(user_id, user_text, current_profile)
+            
+            # 送回應（如果還沒送過）
+            if not replied_flag.is_set():
+                replied_flag.set()
+                line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+        except Exception as e:
+            print(f"[handle_message] 背景執行錯誤: {e}")
+            if not replied_flag.is_set():
+                replied_flag.set()
+                line_bot_api.push_message(user_id, TextSendMessage(text="😵 出了點小問題，請再試一次！"))
+
+    threading.Thread(target=process_and_push, daemon=True).start()
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
