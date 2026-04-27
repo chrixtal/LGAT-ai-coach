@@ -15,6 +15,12 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+try:
+    from base44_integration import sync_user_to_base44, detect_and_save_goal_or_event
+except ImportError:
+    def sync_user_to_base44(*args, **kwargs): pass
+    def detect_and_save_goal_or_event(*args, **kwargs): pass
+
 app = FastAPI()
 
 # --- 環境變數 ---
