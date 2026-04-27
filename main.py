@@ -274,48 +274,6 @@ def save_goal_or_event_to_base44(user_id: str, display_name: str, entity_type: s
 # 目標/事件偵測
 # ============================
 
-def detect_and_save_goal_or_event(user_id: str, display_name: str, user_text: str):
-    """
-    簡單的關鍵詞偵測，自動儲存目標/事件
-    """
-    try:
-        # 目標關鍵詞
-        goal_keywords = ['目標', '我想', '我要', '計畫', '打算', '決定', '想要達成', '想成為']
-        # 事件關鍵詞
-        event_keywords = ['今天', '明天', '這週', '下週', '待辦', '提醒我', '別忘記']
-
-        # 簡單的目標偵測
-        if any(kw in user_text for kw in goal_keywords):
-            title = user_text[:30].replace('我想', '').replace('我要', '').strip()
-            if title and len(title) > 2:
-                save_goal_or_event_to_base44(
-                    user_id,
-                    display_name,
-                    'goal',
-                    title=title,
-                    description=user_text,
-                    type='short'
-                )
-
-        # 簡單的事件偵測
-        elif any(kw in user_text for kw in event_keywords):
-            title = user_text[:30].strip()
-            if title and len(title) > 2:
-                save_goal_or_event_to_base44(
-                    user_id,
-                    display_name,
-                    'event',
-                    title=title,
-                    type='todo',
-                    note=user_text
-                )
-    except Exception as e:
-        print(f"[detect_goal] 失敗: {e}")
-
-# ============================
-# LINE helpers
-# ============================
-
 def get_line_display_name(user_id):
     """從 LINE API 抓用戶暱稱"""
     try:
@@ -622,3 +580,86 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+# ============================
+# Base44 API 整合
+# ============================
+
+import json
+
+BASE44_APP_ID = '69e35caa4e5d9a67dd7dd6e1'
+BASE44_API_URL = 'https://app-ffa38ee7.base44.app/functions'
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/{func_name}'
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[Base44] {func_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        'line_user_id': user_id,
+        'display_name': profile.get('display_name') or '',
+        'coach_tone': profile.get('coach_tone'),
+        'coach_style': profile.get('coach_style'),
+        'quote_freq': profile.get('quote_freq'),
+        'total_messages': profile.get('total_messages', 0),
+        'reminder_enabled': profile.get('reminder_enabled', False),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+    }
+    result = call_base44_function('syncUser', payload)
+    if result:
+        print(f"[Base44] syncUser 成功: {user_id}")
+    return result
+
+def detect_and_save_goal_or_event(user_id, text, profile):
+    """偵測訊息中的目標/事件關鍵詞，自動儲存"""
+    # 簡單的關鍵詞比對
+    goal_keywords = ['目標', '想要', '計畫', '決定', '設定', '希望', '夢想', '目的', '想達成']
+    event_keywords = ['習慣', '待辦', '提醒', '打卡', '完成', '做', '明天', '今天', '每天', '每週']
+    milestone_keywords = ['里程碑', '重要', '關鍵', '達成', '完成', '成就']
+
+    text_lower = text.lower()
+    display_name = profile.get('display_name') or '用戶'
+
+    # 檢查是否包含目標關鍵詞
+    if any(kw in text_lower for kw in goal_keywords):
+        # 嘗試提取目標標題（簡單版，取前 20 字）
+        title = text[:50].strip() if len(text) > 0 else '未命名目標'
+        payload = {
+            'entity_type': 'goal',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+            'description': text,
+            'type': 'short',  # 預設短期，用戶後續可在後台調整
+        }
+        call_base44_function('saveGoalOrEvent', payload)
+        print(f"[Base44] 已記錄目標: {title}")
+
+    # 檢查是否包含事件關鍵詞
+    if any(kw in text_lower for kw in event_keywords):
+        event_type = 'habit' if '習慣' in text_lower or '每' in text_lower else 'todo'
+        if any(mk in text_lower for mk in milestone_keywords):
+            event_type = 'milestone'
+
+        title = text[:50].strip() if len(text) > 0 else '未命名事件'
+        payload = {
+            'entity_type': 'event',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+            'type': event_type,
+            'note': text,
+        }
+        call_base44_function('saveGoalOrEvent', payload)
+        print(f"[Base44] 已記錄事件: {title}")
+
