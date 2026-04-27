@@ -172,6 +172,88 @@ def sync_user_to_base44(line_user_id, profile):
     except Exception as e:
         print(f"[Base44] syncUser 失敗: {e}")
 
+
+def generate_infographic(prompt):
+    """
+    用 AI 生成 infographic 圖片
+    需要在 Base44 設定 API key
+    """
+    try:
+        # 這裡應該呼叫 Base44 的 generate_image 或者 Stability AI
+        # 暫時簡化版本，呼叫 backend 讓它代理生成
+        resp = requests.post(
+            f'{BASE44_API_URL}/generateImage',
+            json={'prompt': prompt},
+            timeout=30
+        )
+        if resp.ok:
+            data = resp.json()
+            return data.get('image_url')
+    except Exception as e:
+        print(f"[Image] 生成失敗: {e}")
+    return None
+
+def process_ai_response(user_id, ai_response):
+    """
+    後處理 AI 回應，檢查是否有 [IMG] 標籤並生成圖片
+    
+    格式：
+    正常的 AI 回應文字...
+    
+    [IMG]用圖表展示我最近一週的進度
+    
+    會拆成：
+    - 文字部分
+    - 圖片部分（自動生成）
+    """
+    if '[IMG]' not in ai_response:
+        # 沒有圖片標籤，直接回傳
+        return [{'type': 'text', 'content': ai_response}]
+    
+    messages = []
+    parts = ai_response.split('[IMG]')
+    
+    # 第一部分是文字
+    if parts[0].strip():
+        messages.append({'type': 'text', 'content': parts[0].strip()})
+    
+    # 後面的部分是圖片提示
+    for img_prompt in parts[1:]:
+        img_prompt = img_prompt.strip()
+        if not img_prompt:
+            continue
+        
+        # 從提示中取到換行為止
+        img_prompt = img_prompt.split('\n')[0][:100]
+        
+        print(f"[Image] 生成圖片: {img_prompt}")
+        image_url = generate_infographic(img_prompt)
+        if image_url:
+            messages.append({'type': 'image', 'url': image_url})
+        else:
+            # 生成失敗，改成文字提示
+            messages.append({'type': 'text', 'content': f'📊 {img_prompt}'})
+    
+    return messages
+
+def send_messages_with_images(user_id, messages):
+    """
+    將訊息列表（可能包含文字和圖片）發送給用戶
+    """
+    for msg in messages:
+        if msg['type'] == 'text':
+            line_bot_api.push_message(user_id, TextSendMessage(text=msg['content']))
+        elif msg['type'] == 'image':
+            from linebot.models import ImageSendMessage
+            line_bot_api.push_message(user_id, ImageSendMessage(
+                original_url=msg['url'],
+                preview_url=msg['url']
+            ))
+        # 稍微延遲以免訊息順序亂
+        import time
+        time.sleep(0.5)
+
+
 def detect_and_save_goal_or_event(line_user_id, display_name, text):
     """自動偵測和儲存目標或事件"""
     goal_patterns = [
@@ -655,7 +737,8 @@ def handle_message(event):
             detect_and_save_goal_or_event(user_id, current_profile.get("display_name", ""), user_text, ai_response)
             if not replied_flag.is_set():
                 replied_flag.set()
-                line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+                messages = process_ai_response(user_id, ai_response)
+                send_messages_with_images(user_id, messages)
         except Exception as e:
             print(f"[handle_message] 背景執行錯誤: {e}")
             if not replied_flag.is_set():
