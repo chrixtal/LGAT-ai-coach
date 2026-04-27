@@ -51,6 +51,86 @@ if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
     print("錯誤: 缺少必要的環境變數設定")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+
+# ============================
+# Base44 Backend 整合
+# ============================
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f"{BASE44_FUNCTION_URL}/{func_name}"
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"[Base44] {func_name} 失敗: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 錯誤: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": display_name,
+        "coach_tone": coach_tone,
+        "coach_style": coach_style,
+        "quote_freq": quote_freq,
+        "total_messages": total_messages,
+    }
+    call_base44_function("syncUser", payload)
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """自動偵測文本中的目標或事件，並儲存到 Base44"""
+    # 簡單的關鍵詞偵測
+    goal_keywords = ["目標", "想要", "要達成", "準備", "決定", "定下", "計畫", "設定一個"]
+    event_keywords = ["完成", "做了", "打卡", "跑了", "吃了", "今天", "昨天", "習慣", "待辦", "里程碑"]
+    
+    text_lower = text.lower()
+    
+    # 判斷是否是目標
+    if any(kw in text for kw in goal_keywords):
+        # 嘗試抽取目標標題（簡單方法：取前30個字）
+        title = text.strip()[:50] if len(text.strip()) > 0 else "新目標"
+        payload = {
+            "entity_type": "goal",
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "title": title,
+            "description": text,
+            "type": "short",  # 預設短期，可後續改進
+        }
+        result = call_base44_function("saveGoalOrEvent", payload)
+        if result and result.get("ok"):
+            print(f"[Goal] 已儲存: {title}")
+    
+    # 判斷是否是事件/習慣/進度更新
+    elif any(kw in text for kw in event_keywords) or "進度" in text:
+        # 如果有「進度」關鍵詞，嘗試找進行中的目標更新
+        if "進度" in text:
+            payload = {
+                "entity_type": "goal_progress",
+                "line_user_id": line_user_id,
+                "progress_note": text,
+            }
+            call_base44_function("saveGoalOrEvent", payload)
+        else:
+            # 否則當作事件
+            title = text.strip()[:50] if len(text.strip()) > 0 else "新事件"
+            payload = {
+                "entity_type": "event",
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "title": title,
+                "type": "todo",
+                "note": text,
+            }
+            result = call_base44_function("saveGoalOrEvent", payload)
+            if result and result.get("ok"):
+                print(f"[Event] 已儲存: {title}")
+
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # ============================
@@ -403,6 +483,16 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     return response.json()
 
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44
+    sync_user_to_base44(
+        user_id,
+        profile.get('display_name', ''),
+        profile.get('coach_tone', 'balanced'),
+        profile.get('coach_style', 'exploratory'),
+        profile.get('quote_freq', 'sometimes'),
+        profile.get('total_messages', 0) + 1
+    )
+    
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
@@ -532,10 +622,17 @@ def handle_message(event):
     def process_and_push():
         # 3a. 同步用戶資料
         current_profile = get_profile(user_id)
-        sync_user_to_base44(user_id, current_profile)
+        sync_user_to_base44(
+            user_id,
+            current_profile.get('display_name', ''),
+            current_profile.get('coach_tone', 'balanced'),
+            current_profile.get('coach_style', 'exploratory'),
+            current_profile.get('quote_freq', 'sometimes'),
+            current_profile.get('total_messages', 0) + 1
+        )
 
         # 3b. 自動偵測目標/事件
-        detect_and_save_goal_or_event(user_id, user_text, current_profile.get('display_name', ''))
+        detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), user_text)
 
         # 3c. Loading animation + Dify
         send_loading_animation(user_id, seconds=60)
