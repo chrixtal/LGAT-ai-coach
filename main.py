@@ -19,8 +19,79 @@ DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
 
+# --- Base44 API ---
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_FUNCTIONS = {
+    'syncUser': f'{BASE44_APP_URL}/functions/syncUser',
+    'saveGoalOrEvent': f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+}
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """背景執行：同步用戶資料到 Base44"""
+    try:
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'coach_tone': coach_tone,
+            'coach_style': coach_style,
+            'quote_freq': quote_freq,
+            'total_messages': total_messages,
+        }
+        requests.post(BASE44_FUNCTIONS['syncUser'], json=payload, timeout=10)
+    except Exception as e:
+        print(f"[Base44 sync] 失敗: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測對話中的目標/事件關鍵詞，自動儲存"""
+    # 目標關鍵詞：我想、我的目標、我要、計畫
+    goal_keywords = [r'我想(?:要)?(.+?)(?:[。！？]|$)', r'我的目標是(.+?)(?:[。！？]|$)', r'我要(?:達成)?(.+?)(?:[。！？]|$)', r'計畫(?:是|要)?(.+?)(?:[。！？]|$)']
+    
+    # 事件關鍵詞：習慣、待辦、提醒、里程碑
+    event_keywords = [r'(?:建立|養成|保持)(.+?)(?:習慣|作息)', r'待辦(.+?)(?:[。！？]|$)', r'提醒(?:我)?(.+?)(?:[。！？]|$)', r'里程碑(.+?)(?:[。！？]|$)']
+    
+    # 檢查目標
+    for pattern in goal_keywords:
+        match = re.search(pattern, text)
+        if match:
+            goal_title = match.group(1).strip()[:50]
+            if goal_title:
+                try:
+                    payload = {
+                        'entity_type': 'goal',
+                        'line_user_id': line_user_id,
+                        'display_name': display_name,
+                        'title': goal_title,
+                        'type': 'short',  # 預設短期
+                    }
+                    requests.post(BASE44_FUNCTIONS['saveGoalOrEvent'], json=payload, timeout=10)
+                    print(f"[Base44] 儲存目標: {goal_title}")
+                except Exception as e:
+                    print(f"[Base44 goal save] 失敗: {e}")
+                break
+    
+    # 檢查事件
+    for pattern in event_keywords:
+        match = re.search(pattern, text)
+        if match:
+            event_title = match.group(1).strip()[:50]
+            if event_title:
+                try:
+                    payload = {
+                        'entity_type': 'event',
+                        'line_user_id': line_user_id,
+                        'display_name': display_name,
+                        'title': event_title,
+                        'type': 'todo',  # 預設待辦
+                    }
+                    requests.post(BASE44_FUNCTIONS['saveGoalOrEvent'], json=payload, timeout=10)
+                    print(f"[Base44] 儲存事件: {event_title}")
+                except Exception as e:
+                    print(f"[Base44 event save] 失敗: {e}")
+                break
+
 # ============================
-# 教練設定
+# 教練設定（從環境變數讀取）
+
 # ============================
 def _parse_options(env_val):
     result = {}
@@ -109,6 +180,15 @@ def reset_conversation(line_user_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('DELETE FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
+    conn.commit()
+    conn.close()
+
+
+def increment_message_count(line_user_id):
+    """增加用戶訊息計數"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE user_profiles SET total_messages = total_messages + 1 WHERE line_user_id = ?", (line_user_id,))
     conn.commit()
     conn.close()
 
