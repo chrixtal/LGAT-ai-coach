@@ -48,94 +48,12 @@ QUOTE_OPTIONS = _parse_options(os.environ.get(
 ))
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
-    print("錯誤: 缺少必要的環境變數設定")
+    print("錯誤: 缺少必要的環境變數設定。")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-
-# ============================
-# Base44 Backend 整合
-# ============================
-
-def call_base44_function(func_name, payload):
-    """呼叫 Base44 backend function"""
-    try:
-        url = f"{BASE44_FUNCTION_URL}/{func_name}"
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"[Base44] {func_name} 失敗: {response.status_code} {response.text}")
-            return None
-    except Exception as e:
-        print(f"[Base44] {func_name} 錯誤: {e}")
-        return None
-
-def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
-    """同步用戶資料到 Base44"""
-    payload = {
-        "line_user_id": line_user_id,
-        "display_name": display_name,
-        "coach_tone": coach_tone,
-        "coach_style": coach_style,
-        "quote_freq": quote_freq,
-        "total_messages": total_messages,
-    }
-    call_base44_function("syncUser", payload)
-
-def detect_and_save_goal_or_event(line_user_id, display_name, text):
-    """自動偵測文本中的目標或事件，並儲存到 Base44"""
-    # 簡單的關鍵詞偵測
-    goal_keywords = ["目標", "想要", "要達成", "準備", "決定", "定下", "計畫", "設定一個"]
-    event_keywords = ["完成", "做了", "打卡", "跑了", "吃了", "今天", "昨天", "習慣", "待辦", "里程碑"]
-    
-    text_lower = text.lower()
-    
-    # 判斷是否是目標
-    if any(kw in text for kw in goal_keywords):
-        # 嘗試抽取目標標題（簡單方法：取前30個字）
-        title = text.strip()[:50] if len(text.strip()) > 0 else "新目標"
-        payload = {
-            "entity_type": "goal",
-            "line_user_id": line_user_id,
-            "display_name": display_name,
-            "title": title,
-            "description": text,
-            "type": "short",  # 預設短期，可後續改進
-        }
-        result = call_base44_function("saveGoalOrEvent", payload)
-        if result and result.get("ok"):
-            print(f"[Goal] 已儲存: {title}")
-    
-    # 判斷是否是事件/習慣/進度更新
-    elif any(kw in text for kw in event_keywords) or "進度" in text:
-        # 如果有「進度」關鍵詞，嘗試找進行中的目標更新
-        if "進度" in text:
-            payload = {
-                "entity_type": "goal_progress",
-                "line_user_id": line_user_id,
-                "progress_note": text,
-            }
-            call_base44_function("saveGoalOrEvent", payload)
-        else:
-            # 否則當作事件
-            title = text.strip()[:50] if len(text.strip()) > 0 else "新事件"
-            payload = {
-                "entity_type": "event",
-                "line_user_id": line_user_id,
-                "display_name": display_name,
-                "title": title,
-                "type": "todo",
-                "note": text,
-            }
-            result = call_base44_function("saveGoalOrEvent", payload)
-            if result and result.get("ok"):
-                print(f"[Event] 已儲存: {title}")
-
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# ============================
-# SQLite 初始化
-# ============================
+# --- SQLite 初始化 ---
 DB_PATH = os.environ.get('DB_PATH', '/data/lgat.db')
 
 def init_db():
@@ -159,6 +77,7 @@ def init_db():
             quote_freq TEXT DEFAULT 'sometimes',
             onboarding_done INTEGER DEFAULT 0,
             onboarding_step INTEGER DEFAULT 0,
+            total_messages INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -217,6 +136,7 @@ def get_profile(line_user_id):
         'quote_freq': 'sometimes',
         'onboarding_done': 0,
         'onboarding_step': 0,
+        'total_messages': 0,
     }
 
 def save_profile(line_user_id, **kwargs):
@@ -232,90 +152,95 @@ def save_profile(line_user_id, **kwargs):
     conn.close()
 
 # ============================
-# Base44 同步函數
+# Base44 API Bridge
 # ============================
 
-def sync_user_to_base44(user_id: str, profile: dict):
-    """將用戶資料同步到 Base44"""
+def sync_user_to_base44(line_user_id, profile):
+    """把用戶資料同步到 Base44"""
     try:
-        payload = {
-            'line_user_id': user_id,
-            'display_name': profile.get('display_name', ''),
-            'coach_tone': profile.get('coach_tone', 'balanced'),
-            'coach_style': profile.get('coach_style', 'exploratory'),
-            'quote_freq': profile.get('quote_freq', 'sometimes'),
-            'total_messages': profile.get('total_messages', 0),
-        }
         resp = requests.post(
             f'{BASE44_API_URL}/functions/syncUser',
-            json=payload,
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone') or 'balanced',
+                'coach_style': profile.get('coach_style') or 'exploratory',
+                'quote_freq': profile.get('quote_freq') or 'sometimes',
+                'total_messages': profile.get('total_messages') or 0,
+                'plan': profile.get('plan') or 'free',
+            },
             timeout=5
         )
         if resp.status_code == 200:
-            print(f"[Base44] syncUser 成功 | user={user_id}")
+            print(f"[syncUser] ✅ | user={line_user_id}")
         else:
-            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+            print(f"[syncUser] ❌ ({resp.status_code}): {resp.text[:100]}")
     except Exception as e:
-        print(f"[Base44] syncUser 例外: {e}")
+        print(f"[syncUser] 錯誤: {e}")
 
-def detect_and_save_goal_or_event(user_id: str, text: str, display_name: str):
-    """偵測關鍵詞，自動儲存目標/事件"""
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
     try:
-        # 簡單的關鍵詞偵測
-        goal_keywords = ['目標', '想要', '計畫', '目的', '達成', 'goal', '長期', '中期', '短期']
-        event_keywords = ['待辦', '記一下', '提醒', '習慣', '打卡', 'todo', 'task', '今天', '明天']
-
-        text_lower = text.lower()
-
-        # 偵測目標
-        if any(kw in text_lower or kw in text for kw in goal_keywords):
-            goal_type = 'short'
-            if '長期' in text or '一年' in text or '明年' in text:
-                goal_type = 'long'
-            elif '三個月' in text or '中期' in text or '半年' in text:
-                goal_type = 'medium'
-
-            payload = {
-                'entity_type': 'goal',
-                'line_user_id': user_id,
-                'display_name': display_name,
-                'title': text[:50],
-                'description': text,
-                'type': goal_type,
-            }
-            resp = requests.post(
-                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
-                json=payload,
-                timeout=5
-            )
-            if resp.status_code == 200:
-                print(f"[Base44] 偵測到目標已儲存 | user={user_id}")
-
-        # 偵測事件
-        elif any(kw in text_lower or kw in text for kw in event_keywords):
-            payload = {
-                'entity_type': 'event',
-                'line_user_id': user_id,
-                'display_name': display_name,
-                'title': text[:50],
-                'type': 'todo',
-                'note': text,
-            }
-            resp = requests.post(
-                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
-                json=payload,
-                timeout=5
-            )
-            if resp.status_code == 200:
-                print(f"[Base44] 偵測到事件已儲存 | user={user_id}")
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name or '',
+                'entity_type': entity_type,
+                **fields
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[saveGoalOrEvent] ✅ {entity_type} | user={line_user_id}")
+        else:
+            print(f"[saveGoalOrEvent] ❌ ({resp.status_code}): {resp.text[:100]}")
     except Exception as e:
-        print(f"[Base44] 偵測例外: {e}")
+        print(f"[saveGoalOrEvent] 錯誤: {e}")
+
+def detect_and_save_goals_events(line_user_id, display_name, text):
+    """自動偵測用戶對話中的目標/事件，存進 Base44"""
+    # 簡易關鍵詞偵測
+    goal_keywords = ['目標', '想要', '計畫', '打算', '決定', 'goal', 'want to', 'plan']
+    event_keywords = ['完成', '做了', '待辦', '習慣', '打卡', 'done', 'completed', 'todo']
+    progress_keywords = ['進度', '完成了', '做到', '達成', 'progress', 'achieve']
+
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+    is_progress = any(kw in text for kw in progress_keywords)
+
+    # 簡單提取標題（句子的前 20 個字）
+    title = text[:30].strip()
+
+    if is_progress:
+        save_goal_or_event_to_base44(
+            line_user_id, display_name,
+            'goal_progress',
+            progress_note=text[:100]
+        )
+    elif is_goal:
+        save_goal_or_event_to_base44(
+            line_user_id, display_name,
+            'goal',
+            title=title,
+            description=text[:100],
+            type='short'
+        )
+    elif is_event:
+        save_goal_or_event_to_base44(
+            line_user_id, display_name,
+            'event',
+            title=title,
+            type='todo',
+            note=text[:100]
+        )
 
 # ============================
 # LINE helpers
 # ============================
 
 def get_line_display_name(user_id):
+    """從 LINE API 抓用戶暱稱"""
     try:
         profile = line_bot_api.get_profile(user_id)
         return profile.display_name or ''
@@ -324,8 +249,9 @@ def get_line_display_name(user_id):
         return ''
 
 def send_loading_animation(user_id, seconds=20):
+    """LINE loading animation（三個彩色點）"""
     try:
-        resp = requests.post(
+        requests.post(
             'https://api.line.me/v2/bot/chat/loading/start',
             headers={
                 'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}',
@@ -334,12 +260,11 @@ def send_loading_animation(user_id, seconds=20):
             json={'chatId': user_id, 'loadingSeconds': seconds},
             timeout=5
         )
-        print(f"[LINE Loading] status={resp.status_code}")
     except Exception as e:
-        print(f"[LINE Loading] 失敗: {e}")
+        print(f"[LINE Loading] {e}")
 
 # ============================
-# 問卷 Onboarding
+# Onboarding
 # ============================
 
 def _build_options_text(options):
@@ -353,7 +278,7 @@ def _style_question():
     return "❸ 你習慣哪種溝通方式？\n\n請輸入數字：\n" + _build_options_text(STYLE_OPTIONS)
 
 def _quote_question():
-    return "❹ 最後一個問題！\n\n你喜歡我在對話中引用名言、學術理論或研究嗎？\n\n請輸入數字：\n" + _build_options_text(QUOTE_OPTIONS)
+    return "❹ 最後一個問題！\n\n你喜歡我引用名言或學術理論嗎？\n\n請輸入數字：\n" + _build_options_text(QUOTE_OPTIONS)
 
 def handle_onboarding(line_user_id, text, profile):
     if profile['onboarding_done']:
@@ -361,94 +286,53 @@ def handle_onboarding(line_user_id, text, profile):
 
     step = profile['onboarding_step']
 
-    # Step 0
     if step == 0:
         line_name = get_line_display_name(line_user_id)
         if line_name:
             save_profile(line_user_id, display_name=line_name, onboarding_step=2)
-            return (
-                f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水 🌊\n\n"
-                "在開始之前，想先了解你喜歡什麼樣的教練風格！\n\n"
-                + _tone_question()
-            )
+            return f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水 🌊\n\n" + _tone_question()
         else:
             save_profile(line_user_id, onboarding_step=1)
-            return (
-                "👋 嗨！我是你的 AI 生活教練 澄若水 🌊\n\n"
-                "在開始之前，我想先多了解你一點！\n\n"
-                "❶ 你怎麼稱呼你自己呢？（輸入你的名字或暱稱就好）"
-            )
+            return "👋 嗨！我是你的 AI 生活教練 澄若水 🌊\n\n❶ 你怎麼稱呼你自己呢？"
 
-    # Step 1
     if step == 1:
         answer = text.strip()
         if not answer:
-            return "名字不能是空的喔！請輸入你的名字或暱稱 😊"
+            return "名字不能是空的喔！"
         save_profile(line_user_id, display_name=answer, onboarding_step=2)
         return "很高興認識你！🙌\n\n" + _tone_question()
 
-    # Step 2
     if step == 2:
         opt = TONE_OPTIONS.get(text.strip())
         if not opt:
-            valid = '、'.join(TONE_OPTIONS.keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _tone_question()
+            return f"請輸入 1-{len(TONE_OPTIONS)} 的數字\n\n" + _tone_question()
         save_profile(line_user_id, coach_tone=opt['value'], onboarding_step=3)
         return _style_question()
 
-    # Step 3
     if step == 3:
         opt = STYLE_OPTIONS.get(text.strip())
         if not opt:
-            valid = '、'.join(STYLE_OPTIONS.keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _style_question()
+            return f"請輸入 1-{len(STYLE_OPTIONS)} 的數字\n\n" + _style_question()
         save_profile(line_user_id, coach_style=opt['value'], onboarding_step=4)
         return _quote_question()
 
-    # Step 4
     if step == 4:
         opt = QUOTE_OPTIONS.get(text.strip())
         if not opt:
-            valid = '、'.join(QUOTE_OPTIONS.keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _quote_question()
-        save_profile(line_user_id, quote_freq=opt['value'], onboarding_done=1, onboarding_step=5)
+            return f"請輸入 1-{len(QUOTE_OPTIONS)} 的數字\n\n" + _quote_question()
+        save_profile(line_user_id, quote_freq=opt['value'], onboarding_done=1)
 
         p = get_profile(line_user_id)
         name = p['display_name'] or '你'
-        tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == p['coach_tone']), '')
-        style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == p['coach_style']), '')
-        quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == p['quote_freq']), '')
-
-        return (
-            f"太棒了，{name}！✨ 設定完成！\n\n"
-            f"📋 你的教練風格：\n"
-            f"• 語氣：{tone_label}\n"
-            f"• 溝通方式：{style_label}\n"
-            f"• 引用頻率：{quote_label}\n\n"
-            "從現在開始，我就是你的專屬教練了 💪\n"
-            "有什麼想聊的，直接說吧！\n\n"
-            "（隨時可以輸入 ⚙️ /setting 重新調整教練風格）"
-        )
+        return f"太棒了，{name}！✨ 設定完成！\n\n從現在開始我是你的專屬教練了 💪"
 
     return None
 
 # ============================
-# Dify inputs 組裝
+# Dify
 # ============================
 
 def build_dify_inputs(profile):
-    import datetime
-    try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo("Asia/Taipei")
-    except ImportError:
-        # Python < 3.9
-        import pytz
-        tz = pytz.timezone("Asia/Taipei")
-    
-    now = datetime.datetime.now(tz)
-    current_time = now.strftime("%Y年%m月%d日 %H:%M")
-
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
     quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '偶爾適時引用即可')
@@ -457,12 +341,7 @@ def build_dify_inputs(profile):
         "coach_tone": tone_dify,
         "coach_style": style_dify,
         "quote_freq": quote_dify,
-        "current_time": current_time,
     }
-
-# ============================
-# Dify API
-# ============================
 
 def call_dify(api_key, user_id, text, conversation_id, inputs):
     url = f'{DIFY_API_URL}/chat-messages'
@@ -483,16 +362,6 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     return response.json()
 
 def ask_dify(user_id, text, profile):
-    # 同步用戶資料到 Base44
-    sync_user_to_base44(
-        user_id,
-        profile.get('display_name', ''),
-        profile.get('coach_tone', 'balanced'),
-        profile.get('coach_style', 'exploratory'),
-        profile.get('quote_freq', 'sometimes'),
-        profile.get('total_messages', 0) + 1
-    )
-    
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
@@ -505,10 +374,9 @@ def ask_dify(user_id, text, profile):
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-        print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
+        print(f"[Dify Primary] 連線問題: {e}")
         if DIFY_API_KEY_FALLBACK:
             try:
-                print(f"[Dify Fallback] 啟動備援 | user={user_id}")
                 result = call_dify(DIFY_API_KEY_FALLBACK, user_id, text, None, inputs)
                 answer = result.get('answer', '').strip()
                 if answer:
@@ -516,42 +384,27 @@ def ask_dify(user_id, text, profile):
                 return "😓 備援系統也沒回應，請稍後再試！"
             except Exception as fe:
                 print(f"[Dify Fallback] 失敗: {fe}")
-        return (
-            "☕ 我剛剛去泡了杯茶回來，結果忘記你問什麼了...\n\n"
-            "請稍等一下再試試看！如果一直這樣，請聯絡開發者 Chris 看看哦 🙏"
-        )
+        return "☕ 我剛剛去泡了杯茶回來，結果忘記你問什麼了...\n\n請稍等一下再試試看！"
 
     except requests.exceptions.HTTPError as e:
         status = e.response.status_code if e.response is not None else '未知'
-        error_msg = ''
-        try:
-            error_msg = e.response.json().get('message', '')
-        except Exception:
-            pass
-        print(f"[Dify] HTTP 錯誤 {status}: {error_msg} | user={user_id}")
-        return (
-            f"🔧 我遇到了一點小問題（錯誤碼：{status}）\n\n"
-            "先去找 Chris 修一下，請稍後再試！感謝你的耐心 💪"
-        )
+        print(f"[Dify] HTTP 錯誤 {status}")
+        return f"🔧 我遇到了一點小問題（錯誤碼：{status}）\n\n先去找 Chris 修一下，請稍後再試！"
 
     except Exception as e:
-        print(f"[Dify] 未預期錯誤: {e} | user={user_id}")
-        return (
-            "😵 我剛才靈魂出竅了一下，請再問我一次！\n\n"
-            "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
-        )
+        print(f"[Dify] 錯誤: {e}")
+        return "😵 我剛才靈魂出竅了一下，請再問我一次！"
 
 # ============================
-# 指令
+# Commands
 # ============================
 
 HELP_TEXT = (
     "🤖 指令說明：\n\n"
-    "🔄 /reset    — 清除對話記憶，重新開始\n"
-    "⚙️ /setting  — 重新設定教練風格\n"
-    "📋 /profile  — 查看目前的設定\n"
-    "❓ /help     — 顯示這個說明\n\n"
-    "直接輸入文字就能和我對話！"
+    "🔄 /reset    — 清除對話記憶\n"
+    "⚙️ /setting  — 重新設定\n"
+    "📋 /profile  — 查看設定\n"
+    "❓ /help     — 說明"
 )
 
 def handle_command(user_id, text, profile):
@@ -559,28 +412,19 @@ def handle_command(user_id, text, profile):
 
     if cmd == '/reset':
         reset_conversation(user_id)
-        return "🔄 對話記憶已清除！\n\n我們重新開始吧～有什麼想聊的？😊"
+        return "🔄 對話記憶已清除！"
 
     if cmd == '/help':
         return HELP_TEXT
 
     if cmd == '/setting':
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
-        return "⚙️ 好的！我們來重新調整一下～\n\n" + _tone_question()
+        return "⚙️ 我們來重新調整一下～\n\n" + _tone_question()
 
     if cmd == '/profile':
         name = profile.get('display_name') or '未設定'
-        tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '未設定')
-        style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '未設定')
-        quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '未設定')
-        return (
-            f"📋 你的教練設定：\n\n"
-            f"👤 名字：{name}\n"
-            f"🎯 語氣：{tone_label}\n"
-            f"💬 溝通方式：{style_label}\n"
-            f"📚 引用頻率：{quote_label}\n\n"
-            "用 /setting 可以重新調整～"
-        )
+        tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '')
+        return f"📋 你的設定：\n👤 {name}\n語氣：{tone_label}"
 
     return None
 
@@ -620,19 +464,15 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
-        # 3a. 同步用戶資料
+        # 3a. 更新訊息次數 + 同步到 Base44
         current_profile = get_profile(user_id)
-        sync_user_to_base44(
-            user_id,
-            current_profile.get('display_name', ''),
-            current_profile.get('coach_tone', 'balanced'),
-            current_profile.get('coach_style', 'exploratory'),
-            current_profile.get('quote_freq', 'sometimes'),
-            current_profile.get('total_messages', 0) + 1
-        )
+        new_count = (current_profile.get('total_messages') or 0) + 1
+        save_profile(user_id, total_messages=new_count)
+        current_profile['total_messages'] = new_count
+        sync_user_to_base44(user_id, current_profile)
 
-        # 3b. 自動偵測目標/事件
-        detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), user_text)
+        # 3b. 自動偵測和儲存目標/事件
+        detect_and_save_goals_events(user_id, current_profile.get('display_name', ''), user_text)
 
         # 3c. Loading animation + Dify
         send_loading_animation(user_id, seconds=60)
@@ -642,7 +482,7 @@ def handle_message(event):
             print(f"[handle_message] 錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
 
-        # 3d. 回應
+        # 3d. Push 回應
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
@@ -650,7 +490,7 @@ def handle_message(event):
     threading.Thread(target=process_and_push, daemon=True).start()
 
 # ============================
-# 健康檢查
+# Health check
 # ============================
 
 @app.get("/health")
