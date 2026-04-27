@@ -392,6 +392,94 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify 相關
 # ============================
 
+
+# ============================
+# Base44 Backend 整合
+# ============================
+
+BASE44_APP_ID = "69e35caa4e5d9a67dd7dd6e1"
+BASE44_API_URL = f"https://app-ffa38ee7.base44.app/functions"
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function，帶著有效的請求內容"""
+    try:
+        url = f"{BASE44_API_URL}/{func_name}"
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44] {func_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": profile.get('display_name') or '',
+        "coach_tone": profile.get('coach_tone'),
+        "coach_style": profile.get('coach_style'),
+        "quote_freq": profile.get('quote_freq'),
+        "total_messages": profile.get('total_messages') or 0,
+        "reminder_enabled": profile.get('reminder_enabled') or False,
+        "reminder_time": profile.get('reminder_time') or '08:00',
+        "plan": "free",
+    }
+    result = call_base44_function("syncUser", payload)
+    if result:
+        print(f"[Base44] syncUser 成功: {line_user_id}")
+    return result
+
+def detect_and_save_goal_or_event(line_user_id, profile, text):
+    """偵測用戶訊息中是否有目標/事件關鍵詞，並嘗試儲存"""
+    # 簡單的關鍵詞偵測（實際應用可以接 Dify 分類）
+    goal_keywords = ['目標', '計畫', '想要', '期望', '達成', '完成']
+    event_keywords = ['待辦', '提醒', '習慣', '打卡', '任務', '今天要做']
+    progress_keywords = ['完成了', '做到了', '達成了', '進度', '更新']
+    
+    has_goal = any(kw in text for kw in goal_keywords)
+    has_event = any(kw in text for kw in event_keywords)
+    has_progress = any(kw in text for kw in progress_keywords)
+    
+    # 如果偵測到目標關鍵詞，嘗試建立目標
+    if has_goal:
+        payload = {
+            "entity_type": "goal",
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name') or '',
+            "title": text[:50],
+            "description": text,
+            "type": "short",
+        }
+        result = call_base44_function("saveGoalOrEvent", payload)
+        if result:
+            print(f"[Base44] 目標已儲存: {line_user_id}")
+    
+    # 如果偵測到事件關鍵詞，嘗試建立事件
+    elif has_event:
+        payload = {
+            "entity_type": "event",
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name') or '',
+            "title": text[:50],
+            "type": "todo",
+            "note": text,
+        }
+        result = call_base44_function("saveGoalOrEvent", payload)
+        if result:
+            print(f"[Base44] 事件已儲存: {line_user_id}")
+    
+    # 如果偵測到進度更新，嘗試更新進度
+    elif has_progress:
+        payload = {
+            "entity_type": "goal_progress",
+            "line_user_id": line_user_id,
+            "progress_note": text,
+        }
+        result = call_base44_function("saveGoalOrEvent", payload)
+        if result:
+            print(f"[Base44] 進度已更新: {line_user_id}")
+
+
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
