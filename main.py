@@ -12,6 +12,82 @@ import uvicorn
 
 app = FastAPI()
 
+# ============================
+# Base44 後端橋接
+# ============================
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    url = f'{BASE44_API_URL}/{func_name}'
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44] {func_name} failed: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": display_name,
+        "coach_tone": coach_tone,
+        "coach_style": coach_style,
+        "quote_freq": quote_freq,
+        "total_messages": total_messages,
+    }
+    result = call_base44_function("syncUser", payload)
+    if result:
+        print(f"[Base44] User synced: {line_user_id}")
+    return result
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """智能偵測用戶輸入中的目標或事件，並儲存到 Base44"""
+    text = text.strip()
+    
+    # 簡單的關鍵詞偵測
+    goal_keywords = ['目標', '計畫', '想要', '要達成', '目標是', '希望能', '想在', '想成為']
+    event_keywords = ['待辦', '要做', '今天', '明天', '這週', '這個月', '習慣', '打卡', '完成']
+    progress_keywords = ['完成了', '做到了', '達成', '成功', '已經', '進度', '發展']
+    
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+    is_progress = any(kw in text for kw in progress_keywords)
+    
+    if is_progress:
+        # 更新進度
+        payload = {
+            "entity_type": "goal_progress",
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "progress_note": text[:100],
+        }
+        call_base44_function("saveGoalOrEvent", payload)
+    elif is_goal:
+        # 新增目標
+        payload = {
+            "entity_type": "goal",
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "title": text[:50],
+            "description": text,
+            "type": "short" if "這週" in text or "這個月" in text else ("medium" if "三個月" in text or "半年" in text else "long"),
+        }
+        call_base44_function("saveGoalOrEvent", payload)
+    elif is_event:
+        # 新增事件
+        payload = {
+            "entity_type": "event",
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "title": text[:50],
+            "type": "habit" if "習慣" in text else ("todo" if "要做" in text or "待辦" in text else "reminder"),
+        }
+        call_base44_function("saveGoalOrEvent", payload)
+
 # --- 環境變數 ---
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
@@ -323,6 +399,20 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
+    
+    # 同步用戶資料到 Base44 並計算對話數
+    current_messages = profile.get('total_messages', 0) or 0
+    sync_user_to_base44(
+        user_id,
+        profile.get('display_name') or '',
+        profile.get('coach_tone') or 'balanced',
+        profile.get('coach_style') or 'exploratory',
+        profile.get('quote_freq') or 'sometimes',
+        total_messages=current_messages + 1,
+    )
+    
+    # 智能偵測和儲存目標/事件
+    detect_and_save_goal_or_event(user_id, profile.get('display_name') or '', text)
 
     try:
         result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
