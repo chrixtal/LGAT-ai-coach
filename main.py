@@ -8,6 +8,99 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+
+# --- 目標/事件偵測 ---
+def detect_goal_or_event(text):
+    """偵測用戶訊息中是否提到目標或事件"""
+    text_lower = text.lower()
+    
+    goal_keywords = {
+        'short': ['想要', '目標', '計畫', '決定', '這個月', '本週', '最近'],
+        'medium': ['6個月', '半年', '中期', '三四個月'],
+        'long': ['長期', '一年', '明年', '未來'],
+    }
+    
+    event_keywords = {
+        'habit': ['習慣', '每天', '每週', '養成', '堅持', '打卡'],
+        'todo': ['做', '完成', '今天', '明天', '待辦', '清單'],
+        'milestone': ['里程碑', '達到', '破', '新紀錄', '成就'],
+    }
+    
+    # 排除干擾詞
+    if any(kw in text_lower for kw in ['天氣', '時間', '幾點', '星期幾']):
+        return None
+    
+    for goal_type, keywords in goal_keywords.items():
+        if any(kw in text_lower for kw in keywords):
+            return ('goal', goal_type)
+    
+    for event_type, keywords in event_keywords.items():
+        if any(kw in text_lower for kw in keywords):
+            return ('event', event_type)
+    
+    return None
+
+def sync_with_base44(user_id, user_name, profile, total_messages):
+    """非同步呼叫 Base44 API 同步用戶資料"""
+    def do_sync():
+        try:
+            import requests
+            api_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+            resp = requests.post(
+                f'{api_url}/functions/syncUser',
+                json={
+                    'line_user_id': user_id,
+                    'display_name': user_name,
+                    'coach_tone': profile.get('coach_tone', 'balanced'),
+                    'coach_style': profile.get('coach_style', 'exploratory'),
+                    'quote_freq': profile.get('quote_freq', 'sometimes'),
+                    'total_messages': total_messages,
+                    'reminder_enabled': profile.get('reminder_enabled', False),
+                    'reminder_time': profile.get('reminder_time', '08:00'),
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44 Sync] ✓ user={user_id}")
+            else:
+                print(f"[Base44 Sync] ✗ {resp.status_code}")
+        except Exception as e:
+            print(f"[Base44 Sync] 失敗: {e}")
+    
+    threading.Thread(target=do_sync, daemon=True).start()
+
+def save_goal_or_event(user_id, user_name, entity_type, sub_type, text):
+    """非同步存目標/事件到 Base44"""
+    def do_save():
+        try:
+            import requests
+            api_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+            
+            # 簡單提取標題
+            title = text.split('。')[0].split('，')[0][:50].replace('想', '').strip() or '未命名'
+            
+            resp = requests.post(
+                f'{api_url}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': entity_type,
+                    'line_user_id': user_id,
+                    'display_name': user_name,
+                    'title': title,
+                    'type': sub_type,
+                    'description': text[:100],
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44 Save] ✓ {entity_type}={sub_type} | {title}")
+            else:
+                print(f"[Base44 Save] ✗ {resp.status_code}")
+        except Exception as e:
+            print(f"[Base44 Save] 失敗: {e}")
+    
+    threading.Thread(target=do_save, daemon=True).start()
+
+
 app = FastAPI()
 
 # --- 環境變數 ---
