@@ -269,6 +269,9 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     return response.json()
 
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44（背景執行，不阻擋主流程）
+    sync_user_to_base44(user_id, profile)
+    
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
