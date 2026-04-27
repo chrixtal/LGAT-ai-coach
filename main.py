@@ -489,6 +489,68 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 目標/事件自動偵測與儲存
+# ============================
+
+def detect_and_save_goal_or_event(user_id, text, display_name):
+    """根據關鍵詞偵測用戶是否提及目標或事件，自動儲存到 Base44"""
+    try:
+        # 目標關鍵詞（短/中/長期）
+        goal_keywords = ['目標', '想要', '計畫', '決定', '目己的', '要做', '要完成', '想完成', '努力', '堅持']
+        goal_score = sum(1 for kw in goal_keywords if kw in text)
+
+        # 事件關鍵詞（習慣/待辦/里程碑）
+        event_keywords = ['完成', '做了', '做到', '達成', '習慣', '今天', '明天', '每天', '每週', '記錄']
+        event_score = sum(1 for kw in event_keywords if kw in text)
+
+        # 若分數足夠高，嘗試提取標題
+        if goal_score >= 2:
+            # 簡單的標題提取：尋找關鍵詞後的名詞
+            match = re.search(r'(?:目標|計畫|想要|決定)[是：: ]?(.{2,20})', text)
+            title = match.group(1).strip() if match else '來自對話的目標'
+            
+            threading.Thread(
+                target=lambda: requests.post(
+                    f'{BASE44_FUNCTION_URL}/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'goal',
+                        'line_user_id': user_id,
+                        'display_name': display_name,
+                        'title': title,
+                        'description': text[:100],
+                        'type': 'short',
+                    },
+                    timeout=5
+                ),
+                daemon=True
+            ).start()
+            print(f"[detect] 發現目標: {title}")
+
+        if event_score >= 2:
+            match = re.search(r'(?:完成|做了|達成|習慣)[了：: ]?(.{2,20})', text)
+            title = match.group(1).strip() if match else '來自對話的事件'
+            
+            threading.Thread(
+                target=lambda: requests.post(
+                    f'{BASE44_FUNCTION_URL}/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'event',
+                        'line_user_id': user_id,
+                        'display_name': display_name,
+                        'title': title,
+                        'type': 'todo',
+                    },
+                    timeout=5
+                ),
+                daemon=True
+            ).start()
+            print(f"[detect] 發現事件: {title}")
+
+    except Exception as e:
+        print(f"[detect_and_save] 錯誤: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
