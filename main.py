@@ -474,6 +474,7 @@ def handle_message(event):
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
             # 同步用戶資料到 Base44
             sync_to_base44(user_id, current_profile)
+            detect_and_save_goal_or_event(user_id, user_text, ai_response, current_profile)
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
@@ -518,3 +519,74 @@ def sync_to_base44(user_id, profile):
     except Exception as e:
         print(f"[Base44 Sync] 錯誤: {e}")
 
+
+# ============================
+# Base44 API 呼叫（同步用戶、存目標/事件）
+# ============================
+
+BACKEND_URL = os.environ.get('BACKEND_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BACKEND_URL}/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone') or 'balanced',
+                'coach_style': profile.get('coach_style') or 'exploratory',
+                'quote_freq': profile.get('quote_freq') or 'sometimes',
+                'total_messages': profile.get('total_messages', 0) + 1,
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] User {user_id} synced")
+        else:
+            print(f"[Base44] sync failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] sync error: {e}")
+
+def detect_and_save_goal_or_event(user_id, user_text, ai_response, profile):
+    """
+    簡易偵測：如果用戶文本含有特定關鍵詞，判斷是目標或事件並存到 Base44
+    """
+    try:
+        goal_keywords = ['目標', '想', '要', '計畫', '夢想', '希望達成', '想要完成']
+        event_keywords = ['完成', '做了', '打卡', '習慣', '待辦', '明天', '今天']
+        
+        has_goal = any(kw in user_text for kw in goal_keywords)
+        has_event = any(kw in user_text for kw in event_keywords) and not has_goal
+        
+        if not (has_goal or has_event):
+            return
+        
+        # 簡單的目標/事件提取（實際應該用 LLM 或更複雜的 NLP）
+        entity_data = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name') or '',
+        }
+        
+        if has_goal:
+            entity_data['entity_type'] = 'goal'
+            entity_data['title'] = user_text[:50]  # 簡單截取
+            entity_data['type'] = 'short' if '今年' not in user_text else 'medium'
+        elif has_event:
+            entity_data['entity_type'] = 'event'
+            entity_data['title'] = user_text[:50]
+            entity_data['type'] = 'todo'
+        
+        resp = requests.post(
+            f'{BACKEND_URL}/functions/saveGoalOrEvent',
+            json=entity_data,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] Goal/Event saved for {user_id}")
+        else:
+            print(f"[Base44] save failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] detect error: {e}")
