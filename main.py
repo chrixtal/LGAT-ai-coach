@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from detect_goal_or_event import detect_goal_or_event
 import threading
 import requests
 import re
@@ -625,10 +626,43 @@ def handle_message(event):
 
     def process_and_push():
         # 1. 同步用戶資料到 Base44
-        sync_user_to_base44(user_id, profile)
+        sync_data = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name') or '',
+            "coach_tone": profile.get('coach_tone'),
+            "coach_style": profile.get('coach_style'),
+            "quote_freq": profile.get('quote_freq'),
+            "total_messages": (profile.get('total_messages') or 0) + 1,
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        call_base44_function('syncUser', sync_data)
         
         # 2. 偵測並儲存目標或事件
-        detect_and_save_goal_or_event(user_id, profile.get('display_name', ''), user_text)
+        detected = detect_goal_or_event(user_text)
+        if detected:
+            save_data = {
+                "entity_type": detected['type'],
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name') or '',
+            }
+            if detected['type'] == 'goal':
+                save_data['title'] = detected['title']
+                save_data['description'] = detected.get('description', '')
+                save_data['type'] = detected.get('goal_type', 'short')
+                save_data['target_date'] = detected.get('target_date', '')
+            elif detected['type'] == 'event':
+                save_data['title'] = detected['title']
+                save_data['type'] = detected['event_type']
+                save_data['due_date'] = detected.get('due_date', '')
+                save_data['recurrence'] = detected.get('recurrence', 'none')
+            elif detected['type'] == 'goal_progress':
+                save_data['title'] = detected['title']
+                save_data['progress_note'] = detected.get('progress_note', '')
+                save_data['status'] = detected.get('status', 'active')
+            
+            call_base44_function('saveGoalOrEvent', save_data)
+            print(f"[Detect] 偵測到 {detected['type']}: {detected['title']} | user={user_id}")
         
         # 3. 送 loading animation
         send_loading_animation(user_id, seconds=60)
