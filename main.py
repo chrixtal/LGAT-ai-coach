@@ -182,6 +182,13 @@ def send_loading_animation(user_id, seconds=20):
 def sync_user_to_base44(line_user_id, profile):
     """同步用戶資料到 BASE44 後台"""
     try:
+        # 讀取 SQLite 的對話計數
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) as cnt FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
+        conv_count = c.fetchone()[0]
+        conn.close()
+        
         resp = requests.post(
             f'{BASE44_APP_URL}/functions/syncUser',
             json={
@@ -190,15 +197,62 @@ def sync_user_to_base44(line_user_id, profile):
                 'coach_tone': profile.get('coach_tone') or 'balanced',
                 'coach_style': profile.get('coach_style') or 'exploratory',
                 'quote_freq': profile.get('quote_freq') or 'sometimes',
+                'total_messages': conv_count,
             },
             timeout=5
         )
         if resp.status_code == 200:
-            print(f"[BASE44] 用戶同步成功")
+            print(f"[BASE44] 用戶同步成功: {line_user_id}")
         else:
-            print(f"[BASE44] 同步失敗: {resp.status_code}")
+            print(f"[BASE44] 同步失敗 ({resp.status_code}): {resp.text[:100]}")
     except Exception as e:
         print(f"[BASE44] 同步錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, user_text, dify_answer, detection, profile):
+    """自動偵測並存儲目標或事件到 BASE44"""
+    try:
+        entity_type = 'goal' if detection['goal_score'] > detection['event_score'] else 'event'
+        
+        # 簡單地用用戶輸入的前 20 個字作為標題
+        title = user_text[:20] if len(user_text) <= 20 else user_text[:20] + '...'
+        
+        payload = {
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': profile.get('display_name') or '',
+            'title': title,
+            'description': f"用戶說：{user_text[:50]}",
+        }
+        
+        if entity_type == 'goal':
+            # 簡單推測：如果是長期計劃的詞（年、很久等），就是長期目標
+            if any(kw in user_text for kw in ['年', '很久', '長期', '永遠']):
+                payload['type'] = 'long'
+            elif any(kw in user_text for kw in ['個月', '半年']):
+                payload['type'] = 'medium'
+            else:
+                payload['type'] = 'short'
+        else:
+            # 事件類型
+            if any(kw in user_text for kw in ['習慣', '每天', '天天']):
+                payload['type'] = 'habit'
+            elif any(kw in user_text for kw in ['里程碑', '達成', '完成']):
+                payload['type'] = 'milestone'
+            else:
+                payload['type'] = 'todo'
+        
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+            json=payload,
+            timeout=5
+        )
+        
+        if resp.status_code == 200:
+            print(f"[BASE44] 儲存 {entity_type} 成功: {title[:30]}")
+        else:
+            print(f"[BASE44] 儲存失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[BASE44] 儲存錯誤: {e}")
 
 def detect_goal_or_event(user_text, dify_answer):
     """啟發式地偵測用戶是否在設定目標或事件"""
@@ -492,10 +546,14 @@ def handle_message(event):
             except Exception as e:
                 print(f"[BASE44] 同步失敗: {e}")
 
-        # 偵測目標/事件（只記錄，不自動存）
+        # 偵測目標/事件並自動存到後台
         detection = detect_goal_or_event(user_text, ai_response)
         if detection['is_goal'] or detection['is_event']:
             print(f"[偵測] goal_score={detection['goal_score']} event_score={detection['event_score']}")
+            try:
+                save_goal_or_event_to_base44(user_id, user_text, ai_response, detection, current_profile)
+            except Exception as e:
+                print(f"[目標/事件存儲] 失敗: {e}")
 
         if not replied_flag.is_set():
             replied_flag.set()
