@@ -388,6 +388,32 @@ def _detect_and_save(user_id, response, profile):
         print(f"[detect_and_save] 失敗: {e}")
 
 
+
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 後台資料庫"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f"{base44_api}/functions/syncUser"
+    
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0) + 1,
+    }
+    
+    resp = requests.post(url, json=payload, timeout=10)
+    if resp.status_code == 200:
+        print(f"[Base44 Sync] {line_user_id} ✅")
+    else:
+        print(f"[Base44 Sync] {line_user_id} 失敗: {resp.status_code}")
+        raise Exception(f"sync failed: {resp.text}")
+
 def ask_dify(user_id, text, profile):
     # 同步用戶資料到 Base44
     try:
