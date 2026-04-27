@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+import json
 
 app = FastAPI()
 
@@ -135,6 +136,27 @@ def sync_user_to_base44(line_user_id, profile):
 # ============================
 # LINE helpers
 # ============================
+
+def detect_goal_or_event(user_id, display_name, dify_response):
+    """簡單啟發式偵測用戶是否提到目標或事件
+    如果偵測到，自動呼叫 saveGoalOrEvent 儲存到 Base44"""
+    def _detect():
+        try:
+            # 簡單的關鍵字偵測 (可以改成用 LLM 做更精準的分析)
+            keywords_goal = ['目標', '想要', '計畫', '希望', '實現', '完成', '達成', '設定']
+            keywords_event = ['明天', '今天', '這週', '待辦', '習慣', '記得', '提醒', '做']
+            
+            resp_lower = dify_response.lower()
+            
+            # 簡單檢查：如果 AI 回應裡有特定格式（例如檢測到 [GOAL] 或 [EVENT] 標記）
+            # 就解析並儲存
+            # 這裡先用簡單方式，後續可改用更聰明的 LLM 分析
+            
+            # 先跳過，因為需要 Dify 端配合返回特殊格式
+        except Exception as e:
+            print(f"[detect_goal_or_event] 錯誤: {e}")
+    
+    threading.Thread(target=_detect, daemon=True).start()
 
 def get_line_display_name(user_id):
     try:
