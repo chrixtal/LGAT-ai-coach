@@ -8,6 +8,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+from base44_integration import sync_user_to_base44, detect_and_save_goal_or_event
 
 app = FastAPI()
 
@@ -83,6 +84,47 @@ def init_db():
     conn.close()
 
 init_db()
+
+# ============================
+# Base44 資料同步
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """呼叫 Base44 API 同步用戶資料"""
+    try:
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "coach_tone": coach_tone,
+            "coach_style": coach_style,
+            "quote_freq": quote_freq,
+            "total_messages": total_messages,
+        }
+        resp = requests.post(f'{BASE44_API_BASE}/syncUser', json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶同步成功 | {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def save_goal_or_event(line_user_id, display_name, entity_type, **fields):
+    """呼叫 Base44 API 儲存目標或事件"""
+    try:
+        payload = {
+            "entity_type": entity_type,  # 'goal' / 'event' / 'goal_progress'
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            **fields
+        }
+        resp = requests.post(f'{BASE44_API_BASE}/saveGoalOrEvent', json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] {entity_type} 儲存成功 | {line_user_id}")
+        else:
+            print(f"[Base44] 儲存失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
 
 def detect_goal_or_event(text):
     """從文本偵測目標或事件
@@ -545,7 +587,13 @@ def handle_message(event):
         current_profile = get_profile(user_id)
         try:
             # 同步用戶到 Base44
-            sync_user_to_base44(user_id, current_profile)
+            sync_user_to_base44(user_id, {
+                'display_name': current_profile.get('display_name', ''),
+                'coach_tone': current_profile.get('coach_tone', 'balanced'),
+                'coach_style': current_profile.get('coach_style', 'exploratory'),
+                'quote_freq': current_profile.get('quote_freq', 'sometimes'),
+                'total_messages': current_profile.get('total_messages', 0),
+            })
             # 偵測並儲存目標/事件
             detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), user_text)
             # 取得 AI 回應
