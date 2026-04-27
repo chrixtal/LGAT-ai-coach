@@ -600,6 +600,26 @@ def detect_and_save_goal_or_event(user_id, text, display_name):
     except Exception as e:
         print(f"[detect_and_save] 錯誤: {e}")
 
+def sync_user_to_backend(user_id, profile, message_count=0):
+    """非同步呼叫 syncUser function，更新後台用戶資料"""
+    try:
+        requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', ''),
+                'coach_style': profile.get('coach_style', ''),
+                'quote_freq': profile.get('quote_freq', ''),
+                'total_messages': message_count,
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
