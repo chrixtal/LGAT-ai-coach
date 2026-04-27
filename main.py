@@ -718,8 +718,87 @@ def handle_message(event):
 async def health():
     return {"status": "ok"}
 
+
+# ============================
+# 背景提醒檢查器
+# ============================
+
+import time
+from datetime import datetime
+
+sent_reminders = {}  # { reminder_id: last_sent_date } 防止重複
+
+def reminder_checker_loop():
+    """每分鐘檢查一次是否有提醒該發送"""
+    while True:
+        try:
+            time.sleep(60)  # 每分鐘檢查一次
+            
+            # 從 Base44 抓取應該發送的提醒
+            resp = requests.post(
+                f'{BACKEND_URL}/functions/getReminders',
+                json={},
+                timeout=5
+            )
+            if not resp.ok:
+                print(f"[Reminder] Failed to fetch reminders: {resp.status_code}")
+                continue
+            
+            data = resp.json()
+            reminders_to_send = data.get('reminders_to_send', [])
+            
+            for reminder in reminders_to_send:
+                user_id = reminder['line_user_id']
+                message = reminder.get('message') or _build_default_reminder_msg(reminder)
+                
+                try:
+                    line_bot_api.push_message(user_id, TextSendMessage(text=message))
+                    print(f"[Reminder] Sent {reminder['type']} to {user_id}")
+                    
+                    # 更新 last_sent_at
+                    try:
+                        requests.post(
+                            f'{BACKEND_URL}/functions/updateReminder',
+                            json={'reminder_id': reminder['reminder_id'], 'last_sent_at': datetime.now().isoformat()},
+                            timeout=5
+                        )
+                    except:
+                        pass
+                
+                except Exception as e:
+                    print(f"[Reminder] Failed to send to {user_id}: {e}")
+        
+        except Exception as e:
+            print(f"[Reminder Checker] Error: {e}")
+
+def _build_default_reminder_msg(reminder):
+    """生成預設提醒訊息"""
+    reminder_type = reminder.get('type', 'custom')
+    name = reminder.get('display_name', '你')
+    
+    messages = {
+        'morning_checkin': f"🌅 早安，{name}！\n\n新的一天開始了，今天有什麼想達成的事嗎？\n\n輸入你的計畫，澄若水陪你一起完成 💪",
+        'goal_review': f"🎯 嗨 {name}！\n\n你的目標最近進展如何？\n\n花一分鐘跟我分享今天的進度吧～",
+        'habit_reminder': f"🔄 {name}，今天的習慣打卡時間到了！\n\n完成了嗎？跟我說一聲 ✅",
+        'weekly_report': f"📊 {name}，本週回顧時間！\n\n這週你做到了什麼？有什麼值得慶祝的？跟我聊聊吧 🌟",
+    }
+    return messages.get(reminder_type, f"🔔 {name}，這是你設定的提醒！")
+
+
+
+# ============================
+# 啟動背景提醒檢查器
+# ============================
+
+def start_reminder_checker():
+    """在背景啟動提醒檢查器"""
+    thread = threading.Thread(target=reminder_checker_loop, daemon=True)
+    thread.start()
+    print("[Startup] Reminder checker started")
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
+    start_reminder_checker()
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 def sync_to_base44(user_id, profile):
