@@ -391,6 +391,85 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 關鍵詞偵測 & 目標/事件儲存
+# ============================
+
+def detect_goal_or_event(text):
+    """
+    簡單的關鍵詞偵測，回傳 (type, title, description) 或 None
+    type: 'goal' / 'event' / None
+    """
+    text_lower = text.lower()
+
+    # 目標關鍵詞（設定長期、中期、短期目標）
+    goal_keywords = [
+        r'(我想|我要|我的目標|我計畫)(是)?([\w\-、，。，]*[達成|完成|學會|達到|達成])?([\w\-、，。，]*)',
+        r'(目標|目的)[是:|]+([\w\-、，。，]*)',
+        r'(這個月|這週|今年|未來)(想|要)([\w\-、，。，]*)',
+    ]
+
+    for pattern in goal_keywords:
+        match = re.search(pattern, text_lower)
+        if match:
+            title = match.group(-1) or match.group(0)
+            title = title.strip('，。、')[:50]  # 限制 50 字
+            if len(title) > 3:
+                return ('goal', title, '')
+
+    # 事件關鍵詞（待辦、習慣、提醒）
+    event_keywords = [
+        (r'(待辦|待做|要做|明天|後天)([\w\-、，。，]*)', 'todo'),
+        (r'(每天|每週|每月|日常)([\w\-、，。，]*)', 'habit'),
+        (r'(提醒我|別忘)([\w\-、，。，]*)', 'reminder'),
+    ]
+
+    for pattern, etype in event_keywords:
+        match = re.search(pattern, text_lower)
+        if match:
+            title = match.group(-1) or match.group(0)
+            title = title.strip('，。、')[:50]
+            if len(title) > 2:
+                return ('event', title, etype)
+
+    return None
+
+def call_backend_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'https://app-ffa38ee7.base44.app/functions/{func_name}'
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"[Backend] {func_name} status={response.status_code}")
+        return response.json() if response.ok else None
+    except Exception as e:
+        print(f"[Backend] {func_name} 呼叫失敗: {e}")
+        return None
+
+def sync_user_to_backend(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name') or '',
+        'coach_tone': profile.get('coach_tone') or 'balanced',
+        'coach_style': profile.get('coach_style') or 'exploratory',
+        'quote_freq': profile.get('quote_freq') or 'sometimes',
+        'total_messages': profile.get('total_messages', 0),
+    }
+    return call_backend_function('syncUser', payload)
+
+def save_goal_or_event_to_backend(line_user_id, entity_type, title, description, extra=None):
+    """儲存目標或事件到 Base44"""
+    payload = {
+        'line_user_id': line_user_id,
+        'entity_type': entity_type,
+        'title': title,
+        'description': description,
+        **(extra or {}),
+    }
+    return call_backend_function('saveGoalOrEvent', payload)
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -477,6 +556,30 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 背景執行：同步用戶到 Base44
+    def sync_bg():
+        try:
+            sync_user_to_backend(user_id, profile)
+        except Exception as e:
+            print(f"[Sync] 同步失敗: {e}")
+    threading.Thread(target=sync_bg, daemon=True).start()
+
+    # 背景執行：偵測並儲存目標/事件
+    def detect_and_save():
+        try:
+            result = detect_goal_or_event(user_text)
+            if result:
+                entity_type, title, extra = result
+                if entity_type == 'goal':
+                    save_goal_or_event_to_backend(user_id, 'goal', title, user_text, {'type': 'short'})
+                    print(f"[Goal] 偵測到目標: {title}")
+                elif entity_type == 'event':
+                    save_goal_or_event_to_backend(user_id, 'event', title, user_text, {'type': extra})
+                    print(f"[Event] 偵測到事件: {title} (type={extra})")
+        except Exception as e:
+            print(f"[Detect] 偵測失敗: {e}")
+    threading.Thread(target=detect_and_save, daemon=True).start()
 
     # 0. 同步用戶資料到 Base44（背景執行）
     def sync_user_bg():
