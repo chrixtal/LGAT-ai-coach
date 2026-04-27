@@ -425,40 +425,32 @@ def ask_dify(user_id, text, profile):
 # ============================
 # 目標/事件偵測與儲存
 # ============================
-def detect_and_save_goal_or_event_to_base44(user_id, user_input, ai_response, display_name):
-    """簡單的關鍵詞偵測，自動儲存目標或事件"""
+def detect_goal_or_event(user_input, profile):
+    """簡單關鍵詞偵測，回傳 (entity_type, fields) 或 None"""
     goal_keywords = ['目標', '想要', '計畫', '決定', '夢想', '希望', '要', '設定']
     event_keywords = ['完成', '做了', '今天', '習慣', '待辦', '任務', '打卡']
     
-    # 簡單檢查：如果用戶輸入或 AI 回應包含這些詞
-    combined_text = (user_input + ai_response).lower()
+    combined_text = user_input.lower()
     
     # 檢查目標
     if any(kw in combined_text for kw in goal_keywords):
         if '目標' in combined_text or '計畫' in combined_text:
-            # 抽取標題（簡化版，只取前30字）
-            title = user_input[:30] if user_input else '新目標'
-            save_goal_or_event_to_base44(
-                'goal',
-                user_id,
-                display_name,
-                title=title,
-                description=user_input[:100],
-                type='short'
-            )
+            return ('goal', {
+                'title': user_input[:30],
+                'description': user_input[:100],
+                'type': 'short'
+            })
     
     # 檢查事件
     if any(kw in combined_text for kw in event_keywords):
         if '完成' in combined_text:
-            title = user_input[:30] if user_input else '新事件'
-            save_goal_or_event_to_base44(
-                'event',
-                user_id,
-                display_name,
-                title=title,
-                type='todo',
-                status='done'
-            )
+            return ('event', {
+                'title': user_input[:30],
+                'type': 'todo',
+            })
+    
+    return None
+
 
 # ============================
 # 指令處理
