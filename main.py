@@ -337,6 +337,78 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify inputs 組裝
 # ============================
 
+
+# ============================
+# 目標/事件偵測
+# ============================
+
+def detect_and_save_goal_or_event(user_id, display_name, ai_response):
+    """
+    偵測 Dify 回應中的特殊標記，自動儲存目標/事件到 Base44
+    標記格式：
+    - [GOAL:title|description|type] 例如 [GOAL:每天運動|跑步30分鐘|short]
+    - [EVENT:title|type|recurrence] 例如 [EVENT:晨跑|habit|daily]
+    """
+    try:
+        # 偵測目標
+        goal_pattern = r'\[GOAL:([^\]]+)\]'
+        goals = re.findall(goal_pattern, ai_response)
+        for goal_str in goals:
+            parts = goal_str.split('|')
+            if len(parts) >= 2:
+                title = parts[0].strip()
+                desc = parts[1].strip() if len(parts) > 1 else ''
+                goal_type = parts[2].strip() if len(parts) > 2 else 'short'
+                try:
+                    resp = requests.post(
+                        'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                        json={
+                            'entity_type': 'goal',
+                            'line_user_id': user_id,
+                            'display_name': display_name,
+                            'title': title,
+                            'description': desc,
+                            'type': goal_type,
+                        },
+                        timeout=5
+                    )
+                    print(f"[saveGoal] {title} - {resp.status_code}")
+                except Exception as e:
+                    print(f"[saveGoal] 失敗: {e}")
+        
+        # 偵測事件
+        event_pattern = r'\[EVENT:([^\]]+)\]'
+        events = re.findall(event_pattern, ai_response)
+        for event_str in events:
+            parts = event_str.split('|')
+            if len(parts) >= 1:
+                title = parts[0].strip()
+                event_type = parts[1].strip() if len(parts) > 1 else 'todo'
+                recurrence = parts[2].strip() if len(parts) > 2 else 'none'
+                try:
+                    resp = requests.post(
+                        'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                        json={
+                            'entity_type': 'event',
+                            'line_user_id': user_id,
+                            'display_name': display_name,
+                            'title': title,
+                            'type': event_type,
+                            'recurrence': recurrence,
+                        },
+                        timeout=5
+                    )
+                    print(f"[saveEvent] {title} - {resp.status_code}")
+                except Exception as e:
+                    print(f"[saveEvent] 失敗: {e}")
+        
+        # 清掉標記，回傳乾淨的回應
+        clean_response = re.sub(r'\[GOAL:[^\]]+\]|\[EVENT:[^\]]+\]', '', ai_response).strip()
+        return clean_response
+    except Exception as e:
+        print(f"[detect_and_save] 錯誤: {e}")
+        return ai_response
+
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
@@ -709,6 +781,24 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
     
+    # 同步用戶資料到 Base44
+    try:
+        sync_resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': (profile.get('total_messages') or 0) + 1,
+            },
+            timeout=5
+        )
+        print(f"[syncUser] {sync_resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+    
     # 每次對話都同步用戶資料到 Base44
     try:
         sync_resp = requests.post(
@@ -764,6 +854,17 @@ def handle_message(event):
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+
+    # 加偵測和儲存目標/事件
+    def process_and_push():
+        send_loading_animation(user_id, seconds=60)
+        current_profile = get_profile(user_id)
+        ai_response = ask_dify(user_id, user_text, current_profile)
+        # 偵測並儲存目標/事件
+        clean_response = detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), ai_response)
+        if not replied_flag.is_set():
+            replied_flag.set()
+            line_bot_api.push_message(user_id, TextSendMessage(text=clean_response))
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
