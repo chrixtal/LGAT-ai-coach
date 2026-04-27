@@ -310,6 +310,30 @@ def sync_user_to_base44(user_id, profile):
         print(f"[Base44] syncUser 失敗: {e}")
     return None
 
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+                'plan': profile.get('plan', 'free'),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶資料已同步: {line_user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser 失敗: {e}")
+
+
 def detect_and_save_goal_or_event(user_id, display_name, text):
     """偵測關鍵詞，自動儲存目標或事件"""
     text_lower = text.lower()
