@@ -431,6 +431,11 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        if answer:
+            # 成功回應後同步用戶資料到 Base44
+            sync_user_to_base44(user_id, profile)
+            # 偵測目標/事件
+            detect_and_save_goal_or_event(user_id, profile.get('display_name', ''), answer)
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
