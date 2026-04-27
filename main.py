@@ -235,6 +235,87 @@ def handle_onboarding(line_user_id, text, profile):
     return None
 
 # ============================
+# ============================
+# Base44 API 整合
+# ============================
+
+BASE44_APP_URL = "https://app-ffa38ee7.base44.app"
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_APP_URL}/functions/syncUser",
+            json={
+                "line_user_id": line_user_id,
+                "display_name": profile.get('display_name', ''),
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": profile.get('total_messages', 0),
+                "reminder_enabled": profile.get('reminder_enabled', False),
+                "reminder_time": profile.get('reminder_time', '08:00'),
+                "plan": profile.get('plan', 'free'),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44 Sync] {line_user_id} 同步成功")
+    except Exception as e:
+        print(f"[Base44 Sync] 例外: {e}")
+
+def save_goal_or_event(line_user_id, entity_type, title, display_name='', **kwargs):
+    """儲存目標或事件到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_APP_URL}/functions/saveGoalOrEvent",
+            json={
+                "entity_type": entity_type,
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "title": title,
+                **kwargs
+            },
+            timeout=5
+        )
+        if resp.ok and resp.json().get('ok'):
+            print(f"[Base44 Save] {entity_type} '{title}' 已儲存")
+    except Exception as e:
+        print(f"[Base44 Save] 例外: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """從用戶訊息中偵測目標或事件，自動儲存"""
+    text_lower = text.lower()
+    goal_keywords = ['目標', '想要', '計畫', '設定', '達成', '希望', '夢想']
+    event_keywords = ['做了', '完成', '待辦', '習慣', '打卡', '記錄']
+    
+    is_goal = any(kw in text_lower for kw in goal_keywords)
+    is_event = any(kw in text_lower for kw in event_keywords)
+    
+    if not (is_goal or is_event):
+        return
+    
+    title = text[:50] if len(text) > 50 else text
+    period_idx = text.find('。')
+    if period_idx > 0:
+        title = text[:period_idx]
+    
+    if is_goal:
+        goal_type = 'short'
+        if '幾個月' in text or '半年' in text:
+            goal_type = 'medium'
+        elif '一年' in text or '多年' in text:
+            goal_type = 'long'
+        save_goal_or_event(line_user_id, 'goal', title, display_name=display_name, description=text, type=goal_type)
+    elif is_event:
+        event_type = 'todo'
+        if '習慣' in text or '打卡' in text:
+            event_type = 'habit'
+        elif '里程碑' in text or '達成' in text:
+            event_type = 'milestone'
+        save_goal_or_event(line_user_id, 'event', title, display_name=display_name, type=event_type, note=text)
+
+
 # Dify inputs 組裝
 # ============================
 
@@ -425,7 +506,16 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
+        # 1. 同步用戶資料到 Base44
+        sync_user_to_base44(user_id, profile)
+        
+        # 2. 偵測並儲存目標或事件
+        detect_and_save_goal_or_event(user_id, profile.get('display_name', ''), user_text)
+        
+        # 3. 送 loading animation
         send_loading_animation(user_id, seconds=60)
+        
+        # 4. 取得最新 profile 並呼叫 Dify
         current_profile = get_profile(user_id)
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
@@ -433,9 +523,7 @@ def handle_message(event):
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
         
-        # 背景同步用戶資料到 Base44
-        threading.Thread(target=lambda: sync_user_to_base44(user_id, current_profile), daemon=True).start()
-        
+        # 5. 用 push_message 傳回應
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
