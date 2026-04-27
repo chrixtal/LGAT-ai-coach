@@ -29,6 +29,37 @@ def call_base44_function(func_name, payload):
         print(f"[Base44] {func_name} failed: {e}")
         return None
 
+def detect_and_save_goals_events(user_id, display_name, user_text, ai_response):
+    """簡單的關鍵詞偵測：判斷用戶是否在設定目標或事件"""
+    text_lower = user_text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想', '計畫', '想要', '希望', '夢想', '要達成', '實現', 'goal', 'want', 'plan']
+    is_goal = any(k in text_lower for k in goal_keywords)
+    
+    # 事件關鍵詞
+    event_keywords = ['習慣', '待辦', '做', '完成', '打卡', 'today', 'done', 'task', 'habit', 'todo']
+    is_event = any(k in text_lower for k in event_keywords)
+    
+    # 如果 AI 回應中提到「目標」或「待辦」，表示可能成功解析
+    if is_goal and ('目標' in ai_response or '計畫' in ai_response):
+        title = user_text.split('。')[0][:50] if user_text else '未命名目標'
+        save_goal_or_event_to_base44(
+            user_id, display_name,
+            entity_type='goal',
+            title=title,
+            type='short',
+        )
+    elif is_event and ('待辦' in ai_response or '完成' in ai_response or '習慣' in ai_response):
+        title = user_text.split('。')[0][:50] if user_text else '未命名事件'
+        save_goal_or_event_to_base44(
+            user_id, display_name,
+            entity_type='event',
+            title=title,
+            type='todo',
+        )
+
+
 def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
     """同步用戶資料到 Base44"""
     payload = {
@@ -590,3 +621,4 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
