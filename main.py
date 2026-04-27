@@ -462,6 +462,30 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
 
+    # 0. 同步用戶資料到 Base44（背景執行）
+    def sync_user_to_base44():
+        try:
+            BASE44_URL = os.environ.get('BASE44_FUNCTION_URL', 'https://app-ffa38ee7.base44.app/functions')
+            requests.post(
+                f'{BASE44_URL}/syncUser',
+                json={
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name') or '',
+                    'coach_tone': profile.get('coach_tone'),
+                    'coach_style': profile.get('coach_style'),
+                    'quote_freq': profile.get('quote_freq'),
+                    'total_messages': (profile.get('total_messages') or 0) + 1,
+                    'reminder_enabled': profile.get('reminder_enabled', False),
+                    'reminder_time': profile.get('reminder_time', '08:00'),
+                },
+                timeout=5
+            )
+            print(f"[syncUser] 更新成功 | user={user_id}")
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+    
+    threading.Thread(target=sync_user_to_base44, daemon=True).start()
+
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
