@@ -313,6 +313,86 @@ def handle_onboarding(line_user_id, text, profile):
     return None
 
 # ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """把用戶資料同步到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+                'reminder_enabled': profile.get('reminder_enabled'),
+                'reminder_time': profile.get('reminder_time'),
+                'plan': profile.get('plan', 'free'),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser OK | user={line_user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 異常: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測用戶輸入是否包含目標或事件關鍵詞，自動儲存"""
+    try:
+        # 簡單關鍵詞偵測
+        goal_keywords = ['目標', '想', '要', '計畫', '打算', '夢想', '期望', '達成']
+        event_keywords = ['待辦', '任務', '習慣', '打卡', '完成', '做']
+        
+        goal_score = sum(1 for kw in goal_keywords if kw in text)
+        event_score = sum(1 for kw in event_keywords if kw in text)
+        
+        if goal_score >= 2:
+            # 嘗試從文本提取目標標題
+            match = re.search(r'(想|要|計畫|打算)(.{2,20})', text)
+            title = match.group(2) if match else f'用戶目標（{text[:20]}）'
+            
+            resp = requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'description': text[:100],
+                    'type': 'short',
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 自動儲存目標: {title}")
+        
+        elif event_score >= 2:
+            match = re.search(r'(待辦|做|完成)(.{2,20})', text)
+            title = match.group(2) if match else f'用戶事件（{text[:20]}）'
+            
+            resp = requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': title,
+                    'type': 'todo',
+                    'note': text[:100],
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 自動儲存事件: {title}")
+    except Exception as e:
+        print(f"[Base44] 偵測目標/事件異常: {e}")
+
+# ============================
 # Dify inputs 組裝
 # ============================
 
