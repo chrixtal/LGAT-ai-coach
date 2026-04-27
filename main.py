@@ -238,6 +238,80 @@ def call_dify(api_key, uid, text, conv_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Base44 API 串接
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base44_url}/functions/syncUser'
+    
+    payload = {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', 'balanced'),
+        'coach_style': profile.get('coach_style', 'exploratory'),
+        'quote_freq': profile.get('quote_freq', 'sometimes'),
+        'total_messages': profile.get('total_messages', 0) + 1,
+        'reminder_enabled': profile.get('reminder_enabled', False),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+    }
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] User synced: {line_user_id}")
+        else:
+            print(f"[Base44] Sync failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] Sync error: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, user_message, ai_response):
+    """偵測用戶訊息中的目標/事件並儲存"""
+    base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base44_url}/functions/saveGoalOrEvent'
+    
+    # 簡單的關鍵詞偵測
+    # 更進階的方式是用 LLM 判斷，但先用簡單規則
+    
+    goal_keywords = ['目標', '想要', '計畫', '目標是', '想達成', '希望', '願景']
+    event_keywords = ['完成', '做', '習慣', '待辦', '里程碑', '打卡', '紀錄']
+    
+    msg_lower = user_message.lower()
+    
+    # 偵測目標
+    if any(kw in user_message for kw in goal_keywords):
+        try:
+            resp = requests.post(url, json={
+                'entity_type': 'goal',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': user_message[:50],  # 簡單起見，用訊息前 50 字作為標題
+                'description': user_message,
+                'type': 'short',  # 預設短期，可由 AI 判斷
+            }, timeout=5)
+            if resp.ok:
+                print(f"[Base44] Goal saved for {line_user_id}")
+        except Exception as e:
+            print(f"[Base44] Save goal error: {e}")
+    
+    # 偵測事件（完成相關訊息）
+    if any(kw in user_message for kw in event_keywords):
+        try:
+            resp = requests.post(url, json={
+                'entity_type': 'event',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': user_message[:50],
+                'type': 'todo',
+                'status': 'done' if '完成' in user_message else 'pending',
+            }, timeout=5)
+            if resp.ok:
+                print(f"[Base44] Event saved for {line_user_id}")
+        except Exception as e:
+            print(f"[Base44] Save event error: {e}")
+
 def ask_dify(uid, text, profile):
     # 同步用戶資料到 Base44
     try:
