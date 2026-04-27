@@ -595,6 +595,19 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
 
+    # 0. 後台同步（每次對話都呼叫一次）
+    sync_data = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name') or '',
+        "coach_tone": profile.get('coach_tone'),
+        "coach_style": profile.get('coach_style'),
+        "quote_freq": profile.get('quote_freq'),
+        "total_messages": (profile.get('total_messages') or 0) + 1,
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+    }
+    threading.Thread(target=lambda: call_base44_function('syncUser', sync_data), daemon=True).start()
+
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
