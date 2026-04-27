@@ -21,6 +21,66 @@ except ImportError:
     def sync_user_to_base44(*args, **kwargs): pass
     def detect_and_save_goal_or_event(*args, **kwargs): pass
 
+
+
+# ============================
+# Base44 API 函數（用戶資料同步、目標/事件儲存）
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] User {line_user_id} synced")
+        else:
+            print(f"[Base44] Sync failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] Sync error: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測用戶訊息中的目標/事件關鍵詞，自動儲存"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '計畫', '目的', '希望', 'goal', 'want to', 'plan to']
+    # 事件關鍵詞
+    event_keywords = ['習慣', '待辦', '提醒', 'todo', 'habit', 'reminder', '每天', '每週']
+    
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+    
+    if is_goal or is_event:
+        try:
+            entity_type = 'goal' if is_goal else 'event'
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': entity_type,
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': text[:50],  # 取前 50 字作為標題
+                    'description': text,
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] {entity_type} saved for {line_user_id}")
+            else:
+                print(f"[Base44] Save failed: {resp.status_code}")
+        except Exception as e:
+            print(f"[Base44] Save error: {e}")
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -540,6 +600,21 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 背景執行：同步用戶資料到 Base44
+    def bg_sync():
+        sync_user_to_base44(
+            user_id,
+            profile.get('display_name', ''),
+            profile.get('coach_tone', 'balanced'),
+            profile.get('coach_style', 'exploratory'),
+            profile.get('quote_freq', 'sometimes'),
+            profile.get('total_messages', 0) + 1
+        )
+        # 偵測並儲存目標/事件
+        detect_and_save_goal_or_event(user_id, profile.get('display_name', ''), user_text)
+    
+    threading.Thread(target=bg_sync, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
