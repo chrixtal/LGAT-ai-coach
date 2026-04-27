@@ -444,6 +444,10 @@ def ask_dify(user_id, text, profile):
 # 指令處理
 # ============================
 
+GOAL_SETUP_TEXT = "🎯 讓我幫你設定一個目標！\n\n請告訴我：\n1. 目標是什麼？\n2. 是短期（1個月內）、中期（3-6個月）還是長期（6個月+）？\n\n舉例：\n我想在一個月內養成每天運動習慣，這是短期目標。"
+
+EVENT_SETUP_TEXT = "📅 好的，我來幫你記錄這個事件！\n\n請告訴我：\n1. 事件標題\n2. 類型：是習慣(🔄)、待辦(✅)、還是里程碑(🏆)？\n\n舉例：\n我要養成每天早起的習慣\n我要完成專案報告（待辦）"
+
 HELP_TEXT = (
     "🤖 指令說明：\n\n"
     "🔄 /reset    — 清除對話記憶，重新開始\n"
@@ -459,6 +463,13 @@ def handle_command(user_id, text, profile):
     if cmd == '/reset':
         reset_conversation(user_id)
         return "🔄 對話記憶已清除！\n\n我們重新開始吧～有什麼想聊的？😊"
+
+    if cmd == '/goal':
+        save_goal_to_backend(user_id, profile.get('display_name', ''), '[待輸入標題]', 'short', '')
+        return GOAL_SETUP_TEXT
+
+    if cmd == '/event':
+        return EVENT_SETUP_TEXT
 
     if cmd == '/help':
         return HELP_TEXT
@@ -482,6 +493,72 @@ def handle_command(user_id, text, profile):
         )
 
     return None
+
+# ============================
+# Backend API calls（與 Base44 後台同步）
+# ============================
+
+def sync_user_to_backend(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/syncUser'
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Sync] ✅ {user_id} synced to backend")
+        else:
+            print(f"[Sync] ⚠️ sync failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Sync] ❌ error: {e}")
+
+def save_goal_to_backend(user_id, display_name, title, goal_type='short', description=''):
+    """儲存目標到 Base44"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+        payload = {
+            'entity_type': 'goal',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+            'description': description,
+            'type': goal_type,  # short / medium / long
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Goal] ✅ saved: {title}")
+        else:
+            print(f"[Goal] ⚠️ save failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Goal] ❌ error: {e}")
+
+def save_event_to_backend(user_id, display_name, title, event_type='todo', note=''):
+    """儲存事件到 Base44"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+        payload = {
+            'entity_type': 'event',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+            'type': event_type,  # habit / todo / milestone / reminder
+            'note': note,
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Event] ✅ saved: {title}")
+        else:
+            print(f"[Event] ⚠️ save failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Event] ❌ error: {e}")
 
 # ============================
 # LINE Webhook
