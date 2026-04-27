@@ -386,6 +386,18 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 後台同步及偵測（非同步，不影響回應速度）
+        display_name = profile.get('display_name', '')
+        total_messages = (profile.get('total_messages') or 0) + 1
+        threading.Thread(
+            target=lambda: (
+                sync_user_to_base44(user_id, profile, total_messages),
+                detect_and_save_goal_or_event(user_id, display_name, text, answer)
+            ),
+            daemon=True
+        ).start()
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -537,3 +549,90 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+# ============================
+# Base44 API 串接
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+def sync_user_to_base44(user_id, profile, total_messages):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': total_messages,
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶資料已同步: {user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def save_goal_or_event_to_base44(user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/saveGoalOrEvent',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'entity_type': entity_type,
+                **fields
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] {entity_type} 已儲存: {user_id}")
+        else:
+            print(f"[Base44] saveGoalOrEvent 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] saveGoalOrEvent 錯誤: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, text, dify_response):
+    """偵測用戶對話中的目標/事件並自動儲存"""
+    # 簡單的關鍵詞偵測
+    keywords_goal = ['目標', '想要', '計畫', '希望', '想達成', 'goal', 'want to', 'plan to']
+    keywords_event = ['完成', '今天', '明天', '習慣', '待辦', '打卡', 'done', 'tomorrow', 'habit']
+    keywords_progress = ['進度', '完成了', '做到了', '達到', 'progress', 'completed', 'finished']
+    
+    text_lower = text.lower()
+    dify_lower = dify_response.lower()
+    
+    # 檢查是否在聊目標進度
+    if any(kw in text_lower for kw in keywords_progress):
+        save_goal_or_event_to_base44(
+            user_id, display_name, 'goal_progress',
+            progress_note=text[:100]
+        )
+    # 檢查是否在設定新目標
+    elif any(kw in text_lower for kw in keywords_goal):
+        # 試著從 Dify 回應裡抽目標標題
+        title = text[:50]  # 暫時用用戶輸入的前50字
+        save_goal_or_event_to_base44(
+            user_id, display_name, 'goal',
+            title=title,
+            description=text,
+            type='short'
+        )
+    # 檢查是否在記錄事件
+    elif any(kw in text_lower for kw in keywords_event):
+        title = text[:50]
+        save_goal_or_event_to_base44(
+            user_id, display_name, 'event',
+            title=title,
+            type='todo'
+        )
+
+
+
