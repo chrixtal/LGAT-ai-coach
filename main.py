@@ -571,7 +571,11 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        if answer:
+            # 偵測並儲存目標/事件
+            detect_goal_or_event(answer, user_id, profile.get('display_name') or '')
+            return answer
+        return "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
@@ -733,3 +737,104 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+# ============================
+# Base44 Backend 串接
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """將用戶資料同步到 Base44 資料庫"""
+    try:
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name') or '',
+            'coach_tone': profile.get('coach_tone') or 'balanced',
+            'coach_style': profile.get('coach_style') or 'exploratory',
+            'quote_freq': profile.get('quote_freq') or 'sometimes',
+            'total_messages': profile.get('total_messages', 0),
+        }
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json=payload,
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser 成功 | user={user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 異常: {e}")
+
+def detect_goal_or_event(response_text, user_id, display_name):
+    """
+    從 Dify 回應中偵測目標/事件標記
+    Dify 的 LLM 回應中若包含特殊標記，Python 端就存到資料庫
+    
+    標記格式：
+    - [GOAL:標題|描述|short/medium/long]
+    - [EVENT:標題|待辦/習慣|無週期/每日/每週]
+    - [PROGRESS:進度說明]
+    """
+    import re
+    
+    # 偵測目標標記
+    goal_matches = re.findall(r'\[GOAL:([^|]+)\|([^|]*)\|([^\]]+)\]', response_text)
+    for title, desc, g_type in goal_matches:
+        try:
+            payload = {
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title.strip(),
+                'description': desc.strip(),
+                'type': g_type.strip().lower() or 'short',
+            }
+            requests.post(
+                f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[Base44] 新增目標: {title}")
+        except Exception as e:
+            print(f"[Base44] 新增目標失敗: {e}")
+    
+    # 偵測事件標記
+    event_matches = re.findall(r'\[EVENT:([^|]+)\|([^|]+)\|([^\]]+)\]', response_text)
+    for title, e_type, recurrence in event_matches:
+        try:
+            payload = {
+                'entity_type': 'event',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title.strip(),
+                'type': e_type.strip().lower() or 'todo',
+                'recurrence': recurrence.strip().lower() or 'none',
+            }
+            requests.post(
+                f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[Base44] 新增事件: {title}")
+        except Exception as e:
+            print(f"[Base44] 新增事件失敗: {e}")
+    
+    # 偵測進度更新標記
+    progress_matches = re.findall(r'\[PROGRESS:([^\]]+)\]', response_text)
+    if progress_matches:
+        try:
+            payload = {
+                'entity_type': 'goal_progress',
+                'line_user_id': user_id,
+                'progress_note': progress_matches[0].strip(),
+            }
+            requests.post(
+                f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[Base44] 更新進度")
+        except Exception as e:
+            print(f"[Base44] 更新進度失敗: {e}")
+
+
+
