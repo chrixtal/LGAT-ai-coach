@@ -666,6 +666,36 @@ def handle_message(event):
 async def health():
     return {"status": "ok"}
 
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(user_id, display_name, profile):
+    """異步同步用戶到 Base44 資料庫"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/syncUser'
+        data = {
+            'line_user_id': user_id,
+            'display_name': display_name or '',
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+            'total_messages': profile.get('total_messages', 0),
+        }
+        resp = requests.post(url, json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ {user_id}")
+        else:
+            print(f"[Base44 Sync] ❌ {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] Error: {e}")
+
+
+def health():
+    return {"status": "ok"}
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
