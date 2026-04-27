@@ -380,7 +380,7 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
 # Base44 後台同步
 # ============================
 
-BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
 
 def _sync_user_to_base44(line_user_id, profile):
     """將用戶資料同步到 Base44"""
@@ -662,6 +662,33 @@ def save_event_to_backend(user_id, display_name, title, event_type='todo', note=
     except Exception as e:
         print(f"[Event] ❌ error: {e}")
 
+
+# ============================
+# Base44 後台資料同步
+# ============================
+
+def sync_user_to_base44(user_id, display_name, profile, total_messages):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': total_messages,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶 {user_id} 同步成功")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
 # ============================
 # LINE Webhook
 # ============================
@@ -722,6 +749,10 @@ def handle_message(event):
         current_profile = get_profile(user_id)
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
+            
+            # 偵測並保存目標/事件
+            display_name = current_profile.get('display_name', '')
+            detect_and_save_goal_or_event(user_id, display_name, ai_response)
         except Exception as e:
             print(f"[handle_message] 錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
