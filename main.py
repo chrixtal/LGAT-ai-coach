@@ -387,6 +387,93 @@ HELP_TEXT = (
     "直接輸入文字就能和我對話！"
 )
 
+# ============================
+# 目標/事件偵測
+# ============================
+
+def detect_goal_or_event(user_text: str):
+    """偵測用戶輸入是否包含目標或事件關鍵字"""
+    text = user_text.lower()
+    
+    goal_keywords = ['目標', '想要', '計畫', '要做', '決心', '希望', '夢想', '改變', '達成', '學會', '掌握']
+    event_keywords = ['待辦', '待做', '任務', '習慣', '完成', '打卡', '記錄', '里程碑']
+    
+    for kw in goal_keywords:
+        if kw in text:
+            goal_type = 'long'
+            if '這週' in text or '今天' in text or '明天' in text:
+                goal_type = 'short'
+            elif '這個月' in text or '下個月' in text:
+                goal_type = 'medium'
+            
+            return ('goal', {
+                'title': user_text[:50],
+                'description': user_text,
+                'type': goal_type
+            })
+    
+    for kw in event_keywords:
+        if kw in text:
+            event_type = 'todo'
+            if '習慣' in text:
+                event_type = 'habit'
+            elif '里程碑' in text:
+                event_type = 'milestone'
+            
+            return ('event', {
+                'title': user_text[:50],
+                'type': event_type,
+                'note': user_text
+            })
+    
+    return None
+
+# ============================
+# Backend 同步函數
+# ============================
+
+BASE44_FUNCTIONS_URL = os.environ.get('BASE44_FUNCTIONS_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+            'plan': profile.get('plan', 'free'),
+        }
+        resp = requests.post(f'{BASE44_FUNCTIONS_URL}/syncUser', json=payload, timeout=10)
+        if resp.ok:
+            print(f"[Base44] syncUser 成功 | user={line_user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, data):
+    """儲存目標或事件到 Base44"""
+    try:
+        payload = {
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            **data
+        }
+        resp = requests.post(f'{BASE44_FUNCTIONS_URL}/saveGoalOrEvent', json=payload, timeout=10)
+        if resp.ok:
+            result = resp.json()
+            print(f"[Base44] 已儲存 {entity_type} | user={line_user_id} | title={data.get('title', '')}")
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
 def handle_command(user_id, text, profile):
     cmd = text.strip().lower()
 
@@ -573,15 +660,15 @@ def sync_message_stats(user_id, user_text, ai_response, profile):
 
         if any(kw in text_lower for kw in keywords_goal):
             print(f"[Goal Detection] {user_id}: {user_text[:50]}")
-            # 可選：自動記錄
-            # save_goal_or_event(user_id, updated_profile.get('display_name', ''), 'goal', 
-            #                   title=user_text[:50], description=user_text, type='short')
+            goal_type = 'short' if any(t in text_lower for t in ['今天', '這週', '明天']) else 'long'
+            save_goal_or_event_to_base44(user_id, updated_profile.get('display_name', ''), 'goal', 
+                                        {'title': user_text[:50], 'description': user_text, 'type': goal_type})
 
         if any(kw in text_lower for kw in keywords_event):
             print(f"[Event Detection] {user_id}: {user_text[:50]}")
-            # 可選：自動記錄
-            # save_goal_or_event(user_id, updated_profile.get('display_name', ''), 'event',
-            #                   title=user_text[:50], type='todo', note=user_text)
+            event_type = 'habit' if '習慣' in text_lower else 'todo'
+            save_goal_or_event_to_base44(user_id, updated_profile.get('display_name', ''), 'event',
+                                        {'title': user_text[:50], 'type': event_type, 'note': user_text})
 
     except Exception as e:
         print(f"[sync_message_stats] 錯誤: {e}")
