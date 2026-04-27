@@ -13,6 +13,32 @@ import uvicorn
 app = FastAPI()
 
 # --- 環境變數 ---
+
+# --- Base44 後端函式呼叫 ---
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+BASE44_API_TOKEN = os.environ.get('BASE44_API_TOKEN', '')
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        if not BASE44_API_TOKEN:
+            print(f"[Base44] 警告: BASE44_API_TOKEN 未設定，略過 {func_name}")
+            return None
+        url = f"{BASE44_API_URL}/{func_name}"
+        headers = {
+            'Authorization': f'Bearer {BASE44_API_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        resp = requests.post(url, json=payload, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Base44] {func_name} 失敗: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 異常: {e}")
+        return None
+
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
@@ -682,6 +708,20 @@ def handle_message(event):
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
+    # 背景同步用戶資料到 Base44
+    def sync_user_async():
+        profile = get_profile(user_id)
+        call_base44_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', ''),
+            'coach_style': profile.get('coach_style', ''),
+            'quote_freq': profile.get('quote_freq', ''),
+            'total_messages': (profile.get('total_messages', 0) or 0) + 1,
+        })
+    
+    threading.Thread(target=sync_user_async, daemon=True).start()
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -689,3 +729,80 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# ============================
+# Base44 API 整合
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+def call_base44_function(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/{function_name}'
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[Base44] {function_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(user_id, display_name, profile, total_messages=0):
+    """同步用戶資料到 Base44"""
+    payload = {
+        'line_user_id': user_id,
+        'display_name': display_name,
+        'coach_tone': profile.get('coach_tone'),
+        'coach_style': profile.get('coach_style'),
+        'quote_freq': profile.get('quote_freq'),
+        'total_messages': total_messages + 1,
+        'reminder_enabled': profile.get('reminder_enabled', False),
+        'reminder_time': profile.get('reminder_time', '08:00'),
+        'plan': profile.get('plan', 'free'),
+    }
+    return call_base44_function('syncUser', payload)
+
+def save_goal_to_base44(user_id, display_name, goal_text):
+    """從對話中偵測並儲存目標"""
+    # 簡單偵測：若句子包含「目標」、「想要」、「計畫」等關鍵詞
+    keywords = ['目標', '想要', '計畫', '想達成', '想實現', '要完成']
+    if not any(kw in goal_text for kw in keywords):
+        return None
+    
+    # 試著從文本中提取目標標題和類型
+    title = goal_text[:50]  # 簡單取前 50 字
+    goal_type = 'short'
+    if '長期' in goal_text:
+        goal_type = 'long'
+    elif '中期' in goal_text or '3個月' in goal_text:
+        goal_type = 'medium'
+    
+    payload = {
+        'entity_type': 'goal',
+        'line_user_id': user_id,
+        'display_name': display_name,
+        'title': title,
+        'type': goal_type,
+    }
+    return call_base44_function('saveGoalOrEvent', payload)
+
+def save_event_to_base44(user_id, display_name, event_text):
+    """從對話中偵測並儲存事件（習慣、待辦等）"""
+    keywords = {'習慣': 'habit', '待辦': 'todo', '里程碑': 'milestone', '提醒': 'reminder'}
+    event_type = 'todo'
+    for kw, etype in keywords.items():
+        if kw in event_text:
+            event_type = etype
+            break
+    
+    title = event_text[:50]
+    payload = {
+        'entity_type': 'event',
+        'line_user_id': user_id,
+        'display_name': display_name,
+        'title': title,
+        'type': event_type,
+    }
+    return call_base44_function('saveGoalOrEvent', payload)
+
