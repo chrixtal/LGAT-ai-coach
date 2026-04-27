@@ -13,7 +13,6 @@ import uvicorn
 # 匯入 Base44 API bridge
 import sys
 sys.path.insert(0, '/app/lgat')
-from api_bridge import sync_user, save_goal_or_event, detect_goal_or_event
 
 app = FastAPI()
 
@@ -382,7 +381,7 @@ def ask_dify(user_id, text, profile):
         )
         
         # 嘗試從回應中檢測目標或事件（簡單版本）
-        detect_and_save_goal_or_event(user_id, text, answer, profile.get('display_name', ''))
+        detect_and_save_goal_or_event_to_base44(user_id, text, answer, profile.get('display_name', ''))
         
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
@@ -426,7 +425,7 @@ def ask_dify(user_id, text, profile):
 # ============================
 # 目標/事件偵測與儲存
 # ============================
-def detect_and_save_goal_or_event(user_id, user_input, ai_response, display_name):
+def detect_and_save_goal_or_event_to_base44(user_id, user_input, ai_response, display_name):
     """簡單的關鍵詞偵測，自動儲存目標或事件"""
     goal_keywords = ['目標', '想要', '計畫', '決定', '夢想', '希望', '要', '設定']
     event_keywords = ['完成', '做了', '今天', '習慣', '待辦', '任務', '打卡']
@@ -544,7 +543,7 @@ def handle_message(event):
             current_profile = get_profile(user_id)
             
             # 同步用戶資料到 Base44
-            sync_user(
+            sync_user_to_base44(
                 line_user_id=user_id,
                 display_name=current_profile.get('display_name', ''),
                 coach_tone=current_profile.get('coach_tone', ''),
@@ -560,7 +559,7 @@ def handle_message(event):
             detected = detect_goal_or_event(user_text, current_profile)
             if detected:
                 entity_type, fields = detected
-                save_goal_or_event(
+                save_goal_or_event_to_base44(
                     entity_type=entity_type,
                     line_user_id=user_id,
                     display_name=current_profile.get('display_name', ''),
@@ -589,6 +588,34 @@ def handle_message(event):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ============================
+# Base44 同步函數
+# ============================
+
+def sync_to_base44(line_user_id, profile):
+    """背景同步用戶資料到 Base44 後台"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    try:
+        resp = requests.post(
+            f'{base44_api}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', ''),
+                'coach_style': profile.get('coach_style', ''),
+                'quote_freq': profile.get('quote_freq', ''),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ {line_user_id}")
+        else:
+            print(f"[Base44 Sync] ⚠️  {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
