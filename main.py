@@ -2,6 +2,7 @@ import os
 import sqlite3
 import threading
 import requests
+import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -82,6 +83,39 @@ def init_db():
     conn.close()
 
 init_db()
+
+def detect_goal_or_event(text):
+    """從文本偵測目標或事件
+    回傳 None，或 {'type': 'goal' | 'event', 'title': str, 'type': str, ...}
+    """
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想', '希望', '目い目指す', 'goal', 'dream', '計劃']
+    # 事件關鍵詞
+    event_keywords = ['做', '要', '待辦', 'todo', '習慣', 'habit', '完成', '今天', '明天']
+
+    goal_match = any(k in text for k in goal_keywords)
+    event_match = any(k in text for k in event_keywords)
+
+    # 簡單的標題提取（取前 30 字）
+    title = text.strip()[:30]
+
+    if goal_match and '目標' in text:
+        # 嘗試從「我想... 預計...」的格式提取
+        if '預計' in text or '計畫' in text or '多久' in text:
+            if '一個月' in text or '月' in text:
+                return {'type': 'goal', 'title': title, 'goal_type': 'short'}
+            elif '三個月' in text or '六個月' in text:
+                return {'type': 'goal', 'title': title, 'goal_type': 'medium'}
+            else:
+                return {'type': 'goal', 'title': title, 'goal_type': 'long'}
+        return {'type': 'goal', 'title': title, 'goal_type': 'short'}
+
+    if event_match:
+        if '習慣' in text or '每天' in text or '每週' in text:
+            return {'type': 'event', 'title': title, 'event_type': 'habit', 'recurrence': 'daily'}
+        return {'type': 'event', 'title': title, 'event_type': 'todo', 'recurrence': 'none'}
+
+    return None
 
 # ============================
 # DB helpers
