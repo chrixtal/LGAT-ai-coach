@@ -175,6 +175,43 @@ def send_loading_animation(user_id, seconds=20):
     except:
         pass
 
+
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name') or '',
+            "coach_tone": profile.get('coach_tone') or 'balanced',
+            "coach_style": profile.get('coach_style') or 'exploratory',
+            "quote_freq": profile.get('quote_freq') or 'sometimes',
+            "total_messages": profile.get('total_messages') or 0,
+            "reminder_enabled": profile.get('reminder_enabled') or False,
+            "reminder_time": profile.get('reminder_time') or '08:00',
+        }
+        resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json=payload,
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser OK | user={user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def detect_and_save_goal_or_event(user_id, profile, dify_response):
+    """偵測 Dify 回應中的目標/事件，自動記錄"""
+    # TODO: 進階邏輯，目前先留下框架
+    # 可在 Dify 回應中加特殊標記，如 [GOAL:目標名稱|描述|短期] 
+    # Python 端檢查並解析
+    pass
+
 # ============================
 # 問卷 Onboarding
 # ============================
@@ -476,6 +513,12 @@ def handle_message(event):
         except Exception as e:
             print(f"[ask_dify] 錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
+
+        # 同步用戶資料到 Base44
+        sync_user_to_base44(user_id, current_profile)
+        
+        # 嘗試偵測目標/事件
+        detect_and_save_goal_or_event(user_id, current_profile, ai_response)
 
         if not replied_flag.is_set():
             replied_flag.set()
