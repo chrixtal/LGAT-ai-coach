@@ -376,6 +376,54 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Base44 後台同步
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def _sync_user_to_base44(line_user_id, profile):
+    """將用戶資料同步到 Base44"""
+    try:
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+        }
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json=payload,
+            timeout=5
+        )
+        if resp.status_code != 200:
+            print(f"[Base44 sync] 失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44 sync] 錯誤: {e}")
+
+def _save_goal_or_event(line_user_id, entity_type, **kwargs):
+    """存目標或事件到 Base44"""
+    try:
+        payload = {
+            "line_user_id": line_user_id,
+            "entity_type": entity_type,  # 'goal' | 'event' | 'goal_progress'
+            **kwargs
+        }
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json=payload,
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] 存檔成功: {entity_type}")
+        else:
+            print(f"[Base44] 存檔失敗: {resp.text}")
+    except Exception as e:
+        print(f"[Base44 save] 錯誤: {e}")
+
+
 def ask_dify(user_id, text, profile):
     # 先同步用戶資料到 Base44
     try:
