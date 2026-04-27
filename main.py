@@ -337,6 +337,58 @@ def build_dify_inputs(profile):
         "quote_freq": quote_dify,
     }
 
+
+
+# ============================
+# Base44 同步函數
+# ============================
+
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+            },
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser OK: {user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def save_goal_or_event(user_id, display_name, entity_type, title, event_type="short"):
+    """儲存目標/事件到 Base44"""
+    try:
+        payload = {
+            'entity_type': entity_type,  # 'goal' or 'event'
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title,
+        }
+        if entity_type == 'goal':
+            payload['type'] = event_type
+        elif entity_type == 'event':
+            payload['type'] = event_type or 'todo'
+        
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+            json=payload,
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[Base44] save {entity_type} OK: {title}")
+    except Exception as e:
+        print(f"[Base44] save {entity_type} 錯誤: {e}")
+
+# ===========================
 def call_dify(api_key, user_id, text, conversation_id, inputs):
     """呼叫 Dify API"""
     url = f'{DIFY_API_URL}/chat-messages'
@@ -513,6 +565,9 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 同步用戶到 Base44
+    sync_user_to_base44(user_id, profile)
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
@@ -632,6 +687,9 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 同步用戶到 Base44
+    sync_user_to_base44(user_id, profile)
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
