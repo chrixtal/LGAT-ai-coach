@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import requests
 import re
+import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -92,20 +93,6 @@ def save_goal_or_event(line_user_id, entity_type, title, **kwargs):
         requests.post(f'{BASE44_API_URL}/functions/saveGoalOrEvent', json=payload, timeout=5)
     except Exception as e:
         print(f"[saveGoalOrEvent] 錯誤: {e}")
-
-def detect_goal_or_event(user_id, text):
-    """簡單關鍵詞偵測，自動儲存目標或事件"""
-    text_lower = text.lower()
-    goal_keywords = ['目標', '想要', '要達到', '計畫', '想完成', '我要', '設定目標']
-    event_keywords = ['待辦', '要做', '習慣', '打卡', '完成', '明天', '今天']
-    
-    goal_score = sum(1 for kw in goal_keywords if kw in text_lower)
-    event_score = sum(1 for kw in event_keywords if kw in text_lower)
-    
-    if goal_score >= 2:
-        save_goal_or_event(user_id, 'goal', text[:30], type='short', description=text)
-    elif event_score >= 2:
-        save_goal_or_event(user_id, 'event', text[:30], type='todo', note=text)
 
 # ============================
 # SQLite 初始化
@@ -468,6 +455,68 @@ def build_dify_inputs(profile):
     }
 
 # ============================
+
+# ============================
+# Base44 Integration
+# ============================
+
+BASE44_APP_URL = "https://app-ffa38ee7.base44.app"
+
+def sync_user_to_base44(line_user_id, display_name="", coach_tone="", coach_style="", quote_freq="", total_messages=0):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_APP_URL}/functions/syncUser",
+            json={
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "coach_tone": coach_tone,
+                "coach_style": coach_style,
+                "quote_freq": quote_freq,
+                "total_messages": total_messages,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ user={line_user_id}")
+            return resp.json()
+        else:
+            print(f"[Base44 Sync] ❌ status={resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+        return None
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, title, description="", type_="short"):
+    """儲存目標或事件到 Base44（非同步）"""
+    def _post():
+        try:
+            payload = {
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "entity_type": entity_type,
+                "title": title,
+                "description": description,
+            }
+            if entity_type == "goal":
+                payload["type"] = type_
+            elif entity_type == "event":
+                payload["type"] = "todo"
+            
+            resp = requests.post(
+                f"{BASE44_APP_URL}/functions/saveGoalOrEvent",
+                json=payload,
+                timeout=5
+            )
+            if resp.status_code == 200:
+                print(f"[Base44 Save] ✅ {entity_type}={title[:30]}")
+            else:
+                print(f"[Base44 Save] ❌ status={resp.status_code}")
+        except Exception as e:
+            print(f"[Base44 Save] 錯誤: {e}")
+    
+    threading.Thread(target=_post, daemon=True).start()
+
 # Dify API 呼叫
 # ============================
 
