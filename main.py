@@ -90,6 +90,8 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_API_KEY = os.environ.get('BASE44_API_KEY', '')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -128,6 +130,67 @@ def init_db():
 
 init_db()
 
+
+# ============================
+# Base44 API 呼叫（資料同步）
+# ============================
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    url = f"{BASE44_API_URL}/functions/{func_name}"
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Base44] {func_name} 失敗: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 錯誤: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": display_name,
+        "coach_tone": profile.get('coach_tone'),
+        "coach_style": profile.get('coach_style'),
+        "quote_freq": profile.get('quote_freq'),
+        "total_messages": profile.get('total_messages', 0) + 1,
+    }
+    result = call_base44_function("syncUser", payload)
+    return result is not None
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text, profile):
+    """自動偵測訊息中的目標/事件關鍵詞並儲存"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '計畫', '希望', '想達成', '期望', '目的']
+    # 事件關鍵詞
+    event_keywords = ['習慣', '待辦', '任務', '做完', '完成', '記錄', '里程碑']
+    
+    is_goal = any(kw in text_lower for kw in goal_keywords)
+    is_event = any(kw in text_lower for kw in event_keywords)
+    
+    if not (is_goal or is_event):
+        return
+    
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": display_name,
+        "entity_type": "goal" if is_goal else "event",
+        "title": text[:50],  # 用前 50 個字作為標題
+        "description": text,
+        "type": "short" if is_goal else "todo",
+    }
+    
+    result = call_base44_function("saveGoalOrEvent", payload)
+    if result:
+        print(f"[Base44] 儲存了 {payload['entity_type']}: {text[:30]}")
+
+# ============================
 # ============================
 # DB helpers
 # ============================
@@ -640,17 +703,18 @@ def handle_message(event):
         save_profile(user_id, total_messages=new_msg_count)
 
         # 同步用戶到 Base44
-        sync_user_to_base44(
-            user_id,
-            current_profile.get('display_name'),
-            current_profile.get('coach_tone'),
-            current_profile.get('coach_style'),
-            current_profile.get('quote_freq'),
-            new_msg_count
-        )
+        payload = {
+            "line_user_id": user_id,
+            "display_name": current_profile.get('display_name'),
+            "coach_tone": current_profile.get('coach_tone'),
+            "coach_style": current_profile.get('coach_style'),
+            "quote_freq": current_profile.get('quote_freq'),
+            "total_messages": new_msg_count,
+        }
+        call_base44_function("syncUser", payload)
 
         # 偵測並儲存目標/事件
-        detect_and_save_goal_or_event(user_id, current_profile.get('display_name'), user_text)
+        detect_and_save_goal_or_event(user_id, current_profile.get('display_name'), user_text, current_profile)
 
         # 發送 loading animation
         send_loading_animation(user_id, seconds=60)
