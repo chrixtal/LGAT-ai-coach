@@ -10,6 +10,11 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+# 匯入 Base44 API bridge
+import sys
+sys.path.insert(0, '/app/lgat')
+from api_bridge import sync_user, save_goal_or_event, detect_goal_or_event
+
 app = FastAPI()
 
 # ============================
@@ -535,13 +540,43 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
-        send_loading_animation(user_id, seconds=60)
-        current_profile = get_profile(user_id)
         try:
+            current_profile = get_profile(user_id)
+            
+            # 同步用戶資料到 Base44
+            sync_user(
+                line_user_id=user_id,
+                display_name=current_profile.get('display_name', ''),
+                coach_tone=current_profile.get('coach_tone', ''),
+                coach_style=current_profile.get('coach_style', ''),
+                quote_freq=current_profile.get('quote_freq', ''),
+                total_messages=(current_profile.get('total_messages') or 0) + 1,
+                reminder_enabled=current_profile.get('reminder_enabled', False),
+                reminder_time=current_profile.get('reminder_time', '08:00'),
+                plan=current_profile.get('plan', 'free'),
+            )
+
+            # 偵測是否在設定目標或事件
+            detected = detect_goal_or_event(user_text, current_profile)
+            if detected:
+                entity_type, fields = detected
+                save_goal_or_event(
+                    entity_type=entity_type,
+                    line_user_id=user_id,
+                    display_name=current_profile.get('display_name', ''),
+                    **fields
+                )
+                print(f"[detect] 儲存 {entity_type} | user={user_id}")
+
+            # 送 loading animation
+            send_loading_animation(user_id, seconds=60)
+
+            # 呼叫 Dify
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
-            print(f"[handle_message] 未預期錯誤: {e}")
+            print(f"[process_and_push] 例外: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
+
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
