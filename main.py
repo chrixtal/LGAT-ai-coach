@@ -198,20 +198,6 @@ def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quo
     except Exception as e:
         print(f"[syncUser] 錯誤: {e}")
 
-def detect_goal_or_event(text):
-    """簡單的關鍵詞偵測，回傳 (entity_type, title) 或 (None, None)"""
-    keywords_goal = ['目標', '想要', '要達成', '計畫', '規劃', '夢想', '達成', '目地']
-    keywords_event = ['待辦', '今天', '明天', '完成', '做', '習慣', '記得', '提醒', '打卡']
-    
-    goal_score = sum(1 for kw in keywords_goal if kw in text)
-    event_score = sum(1 for kw in keywords_event if kw in text)
-    
-    if goal_score >= 2:
-        return ('goal', text[:50])
-    elif event_score >= 2:
-        return ('event', text[:50])
-    return (None, None)
-
 def save_goal_or_event(line_user_id, display_name, entity_type, title):
     """儲存目標或事件到 Base44"""
     try:
