@@ -587,6 +587,103 @@ def detect_goal_or_event(text):
         return ("event", {"title": title, "type": "todo", "note": text})
     return None
 
+
+# ============================
+# Base44 API 串接（同步用戶資料、儲存目標/事件）
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """非同步呼叫 syncUser endpoint，更新用戶在 Base44 的記錄"""
+    def _do_sync():
+        try:
+            data = {
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": profile.get('total_messages', 0) + 1,
+            }
+            resp = requests.post(
+                'https://app-ffa38ee7.base44.app/functions/syncUser',
+                json=data,
+                timeout=5
+            )
+            if resp.status_code != 200:
+                print(f"[Base44 syncUser] 失敗: {resp.status_code}")
+        except Exception as e:
+            print(f"[Base44 syncUser] 錯誤: {e}")
+    
+    threading.Thread(target=_do_sync, daemon=True).start()
+
+def detect_and_save_goal_or_event(user_id, text, profile):
+    """非同步偵測用戶訊息中的目標或事件，並儲存到 Base44"""
+    def _do_detect():
+        import re
+        
+        # 簡單的關鍵詞偵測
+        goal_keywords = ['目標', '想', '希望', '要', '達成', '完成', '計畫', 'goal', 'plan']
+        event_keywords = ['今天', '明天', '待辦', '任務', '習慣', '需要', 'todo', 'habit']
+        
+        text_lower = text.lower()
+        goal_score = sum(1 for kw in goal_keywords if kw in text_lower)
+        event_score = sum(1 for kw in event_keywords if kw in text_lower)
+        
+        # 若分數太低就不儲存
+        if goal_score < 2 and event_score < 2:
+            return
+        
+        try:
+            display_name = profile.get('display_name', '')
+            
+            if goal_score >= event_score and goal_score >= 2:
+                # 儲存為目標
+                # 簡單提取標題（前 50 字或第一句）
+                title = text.split('。')[0][:50] if '。' in text else text[:50]
+                data = {
+                    "entity_type": "goal",
+                    "line_user_id": user_id,
+                    "display_name": display_name,
+                    "title": title,
+                    "description": text[:200],
+                    "type": "short",  # 預設短期
+                }
+                resp = requests.post(
+                    'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                    json=data,
+                    timeout=5
+                )
+                if resp.status_code != 200:
+                    print(f"[Base44 saveGoal] 失敗: {resp.status_code}")
+                else:
+                    print(f"[Base44] 目標已儲存: {title}")
+                    
+            elif event_score >= 2:
+                # 儲存為事件
+                title = text.split('。')[0][:50] if '。' in text else text[:50]
+                data = {
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": display_name,
+                    "title": title,
+                    "type": "todo",  # 預設待辦
+                    "note": text[:200],
+                }
+                resp = requests.post(
+                    'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                    json=data,
+                    timeout=5
+                )
+                if resp.status_code != 200:
+                    print(f"[Base44 saveEvent] 失敗: {resp.status_code}")
+                else:
+                    print(f"[Base44] 事件已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44 saveGoal/Event] 錯誤: {e}")
+    
+    threading.Thread(target=_do_detect, daemon=True).start()
+
+
 # ============================
 # LINE Webhook
 # ============================
