@@ -8,6 +8,9 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+
+# API gateway
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 from base44_integration import sync_user_to_base44, detect_and_save_goal_or_event
 
 app = FastAPI()
