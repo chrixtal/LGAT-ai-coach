@@ -409,9 +409,110 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 目標/事件偵測與儲存
+# ============================
+
+def detect_and_save_goal_or_event(user_id, user_text, ai_response, profile):
+    """偵測用戶的輸入或 AI 回應中的目標/事件關鍵詞，自動儲存"""
+    import re
+    
+    try:
+        display_name = profile.get('display_name', '')
+        
+        # 簡單的關鍵詞偵測（可升級為 LLM 分析）
+        goal_keywords = ['目標', '想', '達成', '完成', '計畫', '目的', '夢想']
+        event_keywords = ['待辦', '事項', '任務', '習慣', '每天', '每週', '習']
+        
+        combined_text = f"{user_text} {ai_response}".lower()
+        
+        # 檢查是否提到目標
+        if any(kw in combined_text for kw in goal_keywords):
+            # 嘗試從回應中提取目標標題
+            title_match = re.search(r'(要|想|目標是|計畫)(.*?)([。\n$])', ai_response)
+            if title_match:
+                title = title_match.group(2).strip()[:50]  # 最多 50 字
+                if title:
+                    # 判斷類型
+                    goal_type = 'short'
+                    if any(w in ai_response for w in ['3個月', '半年', '中期']):
+                        goal_type = 'medium'
+                    elif any(w in ai_response for w in ['半年', '一年', '長期', '明年']):
+                        goal_type = 'long'
+                    
+                    # 非同步呼叫儲存
+                    def save_goal():
+                        try:
+                            requests.post(
+                                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                                json={
+                                    "entity_type": "goal",
+                                    "line_user_id": user_id,
+                                    "display_name": display_name,
+                                    "title": title,
+                                    "type": goal_type,
+                                },
+                                timeout=3
+                            )
+                            print(f"[saveGoal] {user_id} - {title}")
+                        except Exception as e:
+                            print(f"[saveGoal] 失敗: {e}")
+                    
+                    threading.Thread(target=save_goal, daemon=True).start()
+        
+        # 檢查是否提到事件/待辦
+        if any(kw in combined_text for kw in event_keywords):
+            title_match = re.search(r'(要|待辦|事項)(.*?)([。\n$])', ai_response)
+            if title_match:
+                title = title_match.group(2).strip()[:50]
+                if title:
+                    def save_event():
+                        try:
+                            requests.post(
+                                'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                                json={
+                                    "entity_type": "event",
+                                    "line_user_id": user_id,
+                                    "display_name": display_name,
+                                    "title": title,
+                                    "type": "todo",
+                                },
+                                timeout=3
+                            )
+                            print(f"[saveEvent] {user_id} - {title}")
+                        except Exception as e:
+                            print(f"[saveEvent] 失敗: {e}")
+                    
+                    threading.Thread(target=save_event, daemon=True).start()
+    
+    except Exception as e:
+        print(f"[detect_and_save] 錯誤: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
+
+    # 背景執行緒：同步用戶資料到 Base44
+    def sync_in_background():
+        try:
+            sync_data = {
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": (profile.get('total_messages') or 0) + 1,
+            }
+            requests.post(
+                'https://app-ffa38ee7.base44.app/functions/syncUser',
+                json=sync_data,
+                timeout=3
+            )
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+    
+    threading.Thread(target=sync_in_background, daemon=True).start()
 
     try:
         result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
@@ -419,6 +520,10 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 偵測目標/事件關鍵詞
+        detect_and_save_goal_or_event(user_id, text, answer, profile)
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
