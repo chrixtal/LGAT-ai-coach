@@ -360,6 +360,40 @@ async def callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return 'OK'
 
+
+# ============================
+# 目標/事件偵測
+# ============================
+
+def detect_goal_or_event(user_text):
+    """簡單的關鍵詞偵測
+    回傳: (entity_type, title, type) or None
+    """
+    text = user_text.strip()
+    
+    # 目標偵測
+    goal_keywords = ['想要', '計劃', '目標', '決定', '打算', '準備', '要完成']
+    if any(kw in text for kw in goal_keywords):
+        # 簡單提取目標
+        if '短期' in text or '這個月' in text or '這週' in text:
+            goal_type = 'short'
+        elif '中期' in text or '季度' in text or '3個月' in text or '半年' in text:
+            goal_type = 'medium'
+        else:
+            goal_type = 'medium'  # 預設中期
+        return ('goal', text[:50], goal_type)
+    
+    # 事件偵測
+    habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持']
+    todo_keywords = ['要做', '需要', '得完成', '明天', '今天']
+    
+    if any(kw in text for kw in habit_keywords):
+        return ('event', text[:50], 'habit')
+    elif any(kw in text for kw in todo_keywords):
+        return ('event', text[:50], 'todo')
+    
+    return None
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
