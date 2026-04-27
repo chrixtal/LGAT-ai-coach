@@ -392,6 +392,88 @@ def detect_and_save_goal_or_event(user_id, display_name, text):
             print(f"[Base44] saveGoalOrEvent 例外: {e}")
 
 
+
+# ============================
+# Base44 API 整合
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """呼叫 syncUser function 把用戶資料存到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser: {line_user_id} ✓")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def save_goal_or_event(line_user_id, display_name, entity_type, **fields):
+    """呼叫 saveGoalOrEvent 存目標或事件"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'entity_type': entity_type,
+                **fields
+            },
+            timeout=10
+        )
+        if resp.ok:
+            result = resp.json()
+            print(f"[Base44] {entity_type} 已儲存: {line_user_id}")
+            return result.get('result')
+        else:
+            print(f"[Base44] saveGoalOrEvent 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] saveGoalOrEvent 錯誤: {e}")
+
+def detect_goals_and_events(user_text):
+    """從用戶的對話中偵測目標/事件關鍵詞，回傳 [(type, fields), ...]"""
+    results = []
+    text = user_text.lower()
+    
+    # 目標相關關鍵詞
+    goal_keywords = ['目標', '想要', '計畫', '夢想', '希望', '想達到', '想完成', '準備']
+    # 事件/習慣相關關鍵詞
+    event_keywords = ['完成', '做了', '跑步', '閱讀', '冥想', '睡眠', '喝水', '運動', '學習', '待辦', '提醒']
+    
+    # 簡單的關鍵詞匹配（可以用 NLP 更精準，但先用簡單的）
+    if any(kw in text for kw in goal_keywords):
+        # 嘗試抽取目標標題（用簡單的啟發式方法）
+        title = user_text[:30] if len(user_text) <= 30 else user_text[:30] + '...'
+        results.append(('goal', {
+            'title': title,
+            'description': user_text,
+            'type': 'short'  # 預設短期
+        }))
+    
+    if any(kw in text for kw in event_keywords):
+        title = user_text[:30] if len(user_text) <= 30 else user_text[:30] + '...'
+        results.append(('event', {
+            'title': title,
+            'type': 'todo',
+            'note': user_text
+        }))
+    
+    return results
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
