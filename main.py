@@ -319,6 +319,103 @@ def detect_and_save_goal_or_event(line_user_id, display_name, text):
 # Dify inputs 組裝
 # ============================
 
+# ============================
+# Backend Function 調用（Base44 資料同步）
+# ============================
+
+BASE44_APP_ID = "69e35caa4e5d9a67dd7dd6e1"
+BASE44_API_URL = f"https://app-ffa38ee7.base44.app/functions"
+
+def call_backend_function(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f"{BASE44_API_URL}/{function_name}"
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"[Backend] {function_name} failed: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        print(f"[Backend] {function_name} error: {e}")
+        return None
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0),
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+    }
+    result = call_backend_function('syncUser', payload)
+    if result:
+        print(f"[Sync] User {user_id} synced to Base44")
+    return result
+
+def detect_goal_or_event(text):
+    """從對話中偵測目標或事件關鍵詞"""
+    import re
+    
+    # 目標關鍵詞
+    goal_patterns = [
+        r"(想要|要|目標|計畫).*?(做|完成|達成|學|練習|減|增)(\S+)",
+        r"(\S+)的目標",
+        r"(短期|中期|長期)?.*?(目標|願望|夢想)",
+    ]
+    
+    # 事件關鍵詞
+    event_patterns = [
+        r"(已經|剛剛|今天|昨天|明天).*?(做|完成|跑|讀|寫)(\S+)",
+        r"(待辦|習慣|打卡).*?(\S+)",
+        r"(完成|做好|搞定)(\S+)",
+    ]
+    
+    detected = {"type": None, "title": None, "confidence": 0}
+    
+    # 檢查目標
+    for pattern in goal_patterns:
+        match = re.search(pattern, text)
+        if match:
+            title = match.group(0)
+            detected["type"] = "goal"
+            detected["title"] = title[:50]  # 截短到 50 字
+            detected["confidence"] = 0.7
+            break
+    
+    # 檢查事件
+    if detected["type"] is None:
+        for pattern in event_patterns:
+            match = re.search(pattern, text)
+            if match:
+                title = match.group(0)
+                detected["type"] = "event"
+                detected["title"] = title[:50]
+                detected["confidence"] = 0.6
+                break
+    
+    return detected
+
+def save_goal_or_event_to_base44(user_id, display_name, detected):
+    """儲存偵測到的目標/事件到 Base44"""
+    if detected["type"] and detected["confidence"] >= 0.5:
+        payload = {
+            "entity_type": detected["type"],
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "title": detected["title"],
+        }
+        result = call_backend_function('saveGoalOrEvent', payload)
+        if result:
+            print(f"[Save] {detected['type'].upper()} saved for {user_id}: {detected['title']}")
+        return result
+    return None
+
+
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
@@ -379,6 +476,14 @@ def sync_user_to_base44(user_id, profile):
 
 
 def ask_dify(user_id, text, profile):
+    # 先同步用戶資料
+    sync_user_to_base44(user_id, profile)
+    
+    # 偵測是否有目標/事件要儲存
+    detected = detect_goal_or_event(text)
+    if detected["type"]:
+        save_goal_or_event_to_base44(user_id, profile.get('display_name', ''), detected)
+    
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
