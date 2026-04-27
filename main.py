@@ -351,7 +351,62 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# 目標/事件偵測
+# ============================
+
+def _detect_and_save(user_id, response, profile):
+    """嘗試從 Dify 回應中偵測目標或事件並儲存"""
+    try:
+        # 簡易偵測邏輯：檢查回應中是否有特定關鍵詞
+        keywords_goal = ['目標', '計畫', '達成', '完成', '希望', '想要', '準備', '安排']
+        keywords_event = ['今天', '待辦', '任務', '提醒', '習慣', '打卡', '記錄']
+        
+        has_goal = any(kw in response for kw in keywords_goal)
+        has_event = any(kw in response for kw in keywords_event)
+        
+        # 若用戶在對話中明確提到了目標設定，自動記錄
+        if has_goal and ('我想' in response or '我要' in response or '我的目標' in response):
+            print(f"[detect_and_save] 偵測到可能的目標，嘗試儲存")
+            # 簡易提取：取前 50 個字作為目標標題
+            title = response[:50].strip('。，；！？ ')
+            if title:
+                requests.post(
+                    'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'goal',
+                        'line_user_id': user_id,
+                        'display_name': profile.get('display_name', ''),
+                        'title': title,
+                        'type': 'short',
+                    },
+                    timeout=5
+                )
+                print(f"[detect_and_save] 目標已保存: {title}")
+    except Exception as e:
+        print(f"[detect_and_save] 失敗: {e}")
+
+
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44
+    try:
+        sync_resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name'),
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+            },
+            timeout=5
+        )
+        print(f"[syncUser] status={sync_resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
@@ -361,6 +416,11 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 嘗試偵測並儲存目標/事件
+        if answer:
+            threading.Thread(target=_detect_and_save, args=(user_id, answer, profile), daemon=True).start()
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
