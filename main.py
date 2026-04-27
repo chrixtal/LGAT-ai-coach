@@ -505,6 +505,89 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# Backend API 呼叫（Base44）
+# ============================
+
+BASE44_APP_URL = "https://app-ffa38ee7.base44.app"
+
+def sync_user_to_base44(line_user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': profile.get('coach_tone', ''),
+                'coach_style': profile.get('coach_style', ''),
+                'quote_freq': profile.get('quote_freq', ''),
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f"[syncUser] OK for {display_name}")
+        else:
+            print(f"[syncUser] Error: {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測文本中的目標/事件關鍵詞並儲存"""
+    try:
+        # 關鍵詞偵測
+        goal_patterns = [
+            (r'(我想|我要|我的目標是|目標:|設定目標)(.+?)(?=。|$|，)', 'goal'),
+        ]
+        event_patterns = [
+            (r'(完成了|做完了|打卡|習慣)(.+?)(?=。|$|，)', 'event'),
+            (r'(今天|明天)(.+?)待辦', 'event'),
+        ]
+        
+        # 掃描目標
+        for pattern, entity_type in goal_patterns:
+            matches = re.findall(pattern, text)
+            for match in matches:
+                goal_title = match[1].strip() if len(match) > 1 else ''
+                if goal_title and len(goal_title) < 100:
+                    requests.post(
+                        f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                        json={
+                            'entity_type': 'goal',
+                            'line_user_id': line_user_id,
+                            'display_name': display_name,
+                            'title': goal_title,
+                            'type': 'short',
+                        },
+                        timeout=10
+                    )
+                    print(f"[Goal saved] {goal_title}")
+        
+        # 掃描事件
+        for pattern, entity_type in event_patterns:
+            matches = re.findall(pattern, text)
+            for match in matches:
+                event_title = match[1].strip() if len(match) > 1 else ''
+                if event_title and len(event_title) < 100:
+                    requests.post(
+                        f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                        json={
+                            'entity_type': 'event',
+                            'line_user_id': line_user_id,
+                            'display_name': display_name,
+                            'title': event_title,
+                            'type': 'todo',
+                        },
+                        timeout=10
+                    )
+                    print(f"[Event saved] {event_title}")
+    except Exception as e:
+        print(f"[detect_and_save] 失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
