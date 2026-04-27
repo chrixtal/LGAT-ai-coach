@@ -2,6 +2,7 @@ import os
 import sqlite3
 import threading
 import requests
+from base44_sync import sync_user, save_goal_or_event, detect_goal_in_response, detect_event_in_response, detect_goal_progress_in_response
 import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
@@ -480,6 +481,49 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 後台同步：更新用戶資訊和對話計數
+        threading.Thread(
+            target=lambda: sync_user(
+                user_id,
+                display_name=profile.get('display_name', ''),
+                coach_tone=profile.get('coach_tone', ''),
+                coach_style=profile.get('coach_style', ''),
+                quote_freq=profile.get('quote_freq', ''),
+                total_messages=(profile.get('total_messages', 0) or 0) + 1,
+            ),
+            daemon=True
+        ).start()
+        
+        # 偵測回應中的目標/事件標記並自動儲存
+        if answer:
+            goal = detect_goal_in_response(answer)
+            if goal:
+                threading.Thread(
+                    target=lambda g=goal: save_goal_or_event(
+                        user_id, profile.get('display_name', ''), 'goal', **g
+                    ),
+                    daemon=True
+                ).start()
+            
+            event = detect_event_in_response(answer)
+            if event:
+                threading.Thread(
+                    target=lambda e=event: save_goal_or_event(
+                        user_id, profile.get('display_name', ''), 'event', **e
+                    ),
+                    daemon=True
+                ).start()
+            
+            progress = detect_goal_progress_in_response(answer)
+            if progress:
+                threading.Thread(
+                    target=lambda p=progress: save_goal_or_event(
+                        user_id, profile.get('display_name', ''), 'goal_progress', **p
+                    ),
+                    daemon=True
+                ).start()
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -686,7 +730,7 @@ def handle_message(event):
     def sync_user_bg():
         try:
             requests.post(
-                'https://app-dd7dd6e1.base44.app/functions/syncUser',
+                'https://app-ffa38ee7.base44.app/functions/syncUser',
                 json={
                     "line_user_id": user_id,
                     "display_name": profile.get('display_name') or get_line_display_name(user_id),
