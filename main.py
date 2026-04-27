@@ -464,6 +464,66 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# 目標/事件自動偵測（關鍵詞）
+# ============================
+
+import re
+
+def detect_goal_or_event(text):
+    """簡單的關鍵詞偵測，回傳 (type, title, confidence) 或 None"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '希望', '要達成', '計畫', '想達到', '設定', '安排', '決定要', '立志']
+    goal_score = sum(1 for kw in goal_keywords if kw in text_lower)
+    
+    # 事件關鍵詞
+    event_keywords = ['待辦', '要做', '今天', '明天', '這週', '習慣', '打卡', '完成', '記得', '提醒']
+    event_score = sum(1 for kw in event_keywords if kw in text_lower)
+    
+    if goal_score >= 2:
+        # 嘗試提取標題（括號或冒號之後）
+        match = re.search(r'[：:（(]([^）)]+)[）)]', text)
+        title = match.group(1) if match else text[:30]
+        return ('goal', title, goal_score)
+    elif event_score >= 2:
+        match = re.search(r'[：:（(]([^）)]+)[）)]', text)
+        title = match.group(1) if match else text[:30]
+        return ('event', title, event_score)
+    
+    return None
+
+def save_goal_or_event_async(user_id, display_name, text):
+    """背景執行緒儲存目標/事件"""
+    detected = detect_goal_or_event(text)
+    if not detected:
+        return
+    
+    entity_type, title, confidence = detected
+    
+    try:
+        # 呼叫 Base44 backend function
+        resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+            json={
+                'entity_type': entity_type,
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'short' if entity_type == 'goal' else 'todo',
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[saveGoalOrEvent] 成功儲存 {entity_type}: {title}")
+        else:
+            print(f"[saveGoalOrEvent] 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 錯誤: {e}")
+
+
 # ============================
 # LINE Webhook
 # ============================
