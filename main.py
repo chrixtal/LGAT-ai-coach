@@ -162,6 +162,78 @@ def get_line_display_name(user_id):
         print(f"[LINE] 無法取得暱稱: {e}")
         return ''
 
+# ============================
+# Base44 API 呼叫
+# ============================
+
+def call_base44_function(func_name, data):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f"{BASE44_API_URL}/functions/{func_name}"
+        resp = requests.post(url, json=data, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Base44] {func_name} 失敗: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 例外: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, display_name, profile, total_messages):
+    """同步用戶資料到 Base44"""
+    data = {
+        "line_user_id": line_user_id,
+        "display_name": display_name or "未知用戶",
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": total_messages,
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+        "plan": "free",
+    }
+    return call_base44_function('syncUser', data)
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測用戶訊息中的目標或事件關鍵詞，自動儲存"""
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '計畫', '想', '希望', '期望', '設定', '定個']
+    # 事件關鍵詞
+    event_keywords = ['待辦', '待做', '任務', '習慣', '提醒', '里程碑', '完成', '做']
+    
+    text_lower = text.lower()
+    entity_type = None
+    
+    # 簡單的關鍵詞偵測（可改為 NLP）
+    for kw in goal_keywords:
+        if kw in text_lower:
+            entity_type = 'goal'
+            break
+    
+    if not entity_type:
+        for kw in event_keywords:
+            if kw in text_lower:
+                entity_type = 'event'
+                break
+    
+    if entity_type:
+        data = {
+            "entity_type": entity_type,
+            "line_user_id": line_user_id,
+            "display_name": display_name or "未知用戶",
+            "title": text[:30],  # 簡單的標題截取
+            "description": text,
+            "type": "short",  # 預設短期
+        }
+        return call_base44_function('saveGoalOrEvent', data)
+    
+    return None
+
+# ============================
+# LINE Loading Animation
+# ============================
+
 def send_loading_animation(user_id, seconds=20):
     try:
         resp = requests.post(
