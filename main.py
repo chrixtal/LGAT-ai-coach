@@ -123,25 +123,6 @@ def save_profile(line_user_id, **kwargs):
 # Base44 API 橋梁
 # ============================
 
-def sync_user_to_base44(user_id, profile):
-    """同步用戶資料到 Base44"""
-    try:
-        payload = {
-            'line_user_id': user_id,
-            'display_name': profile.get('display_name', ''),
-            'coach_tone': profile.get('coach_tone', 'balanced'),
-            'coach_style': profile.get('coach_style', 'exploratory'),
-            'quote_freq': profile.get('quote_freq', 'sometimes'),
-            'total_messages': 1,
-        }
-        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=payload, timeout=5)
-        if resp.status_code == 200:
-            print(f"[Base44] syncUser OK: {user_id}")
-        else:
-            print(f"[Base44] syncUser error: {resp.status_code}")
-    except Exception as e:
-        print(f"[Base44] syncUser exception: {e}")
-
 def save_goal_or_event_to_base44(user_id, entity_type, display_name, **fields):
     """儲存目標/事件到 Base44"""
     try:
@@ -287,6 +268,34 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+def call_base44_function(func_name, data):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/{func_name}'
+        headers = {'Content-Type': 'application/json'}
+        resp = requests.post(url, headers=headers, json=data, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f'[Base44] 呼叫 {func_name} 失敗: {e}')
+        return None
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    data = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0) + 1,
+    }
+    result = call_base44_function('syncUser', data)
+    if result and result.get('ok'):
+        print(f"[Base44] 用戶 {user_id} 已同步")
+    return result
+
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
