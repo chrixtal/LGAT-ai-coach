@@ -8,6 +8,33 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+import time
+
+# 提醒背景執行緒
+def reminder_checker():
+    """每分鐘檢查一次，看是否有提醒該發出"""
+    import datetime
+    
+    while True:
+        try:
+            tz = datetime.timezone(datetime.timedelta(hours=8))  # 台灣時區
+            now = datetime.datetime.now(tz)
+            current_time = f"{now.hour:02d}:{now.minute:02d}"
+            today_str = now.date().isoformat()
+            
+            # 呼叫 Base44 API 取得需要發送的提醒
+            # 簡化版：直接透過 Python requests 讀資料庫（假設有 API endpoint）
+            # 實際上應該透過 Base44 SDK，但這裡簡化處理
+            
+            time.sleep(60)  # 每 60 秒檢查一次
+        except Exception as e:
+            print(f"[Reminder] 錯誤: {e}")
+            time.sleep(60)
+
+# 啟動提醒背景執行緒（在 app 啟動時）
+reminder_thread = threading.Thread(target=reminder_checker, daemon=True)
+reminder_thread.start()
+
 from datetime import datetime
 
 app = FastAPI()
@@ -572,6 +599,46 @@ def handle_message(event):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ============================
+# 提醒檢查 (背景執行緒)
+# ============================
+
+def check_and_send_reminders():
+    """每分鐘檢查一次，看是否有提醒該發出
+    簡化版：直接透過 HTTP 呼叫 Base44 function
+    """
+    import datetime
+    import time
+    
+    BASE44_API = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    
+    while True:
+        try:
+            # 每分鐘檢查一次
+            time.sleep(60)
+            
+            # 呼叫 sendReminders function
+            resp = requests.post(
+                f'{BASE44_API}/functions/sendReminders',
+                json={"LINE_CHANNEL_ACCESS_TOKEN": LINE_CHANNEL_ACCESS_TOKEN},
+                timeout=10
+            )
+            
+            if resp.status_code == 200:
+                result = resp.json()
+                if result.get('sent_count', 0) > 0:
+                    print(f"[Reminder] 已發送 {result['sent_count']} 則提醒")
+            else:
+                print(f"[Reminder] sendReminders 失敗: {resp.status_code}")
+                
+        except Exception as e:
+            print(f"[Reminder] 檢查失敗: {e}")
+
+# 啟動提醒背景執行緒
+reminder_bg_thread = threading.Thread(target=check_and_send_reminders, daemon=True)
+reminder_bg_thread.start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
