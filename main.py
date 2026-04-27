@@ -472,6 +472,8 @@ def handle_message(event):
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+            # 同步用戶資料到 Base44
+            sync_to_base44(user_id, current_profile)
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
@@ -493,3 +495,26 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+def sync_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        base44_url = os.environ.get('BASE44_SYNC_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
+        resp = requests.post(
+            base44_url,
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ {user_id}")
+        else:
+            print(f"[Base44 Sync] ❌ {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
