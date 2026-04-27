@@ -357,6 +357,55 @@ def build_dify_inputs(profile):
 # ============================
 # Dify API 呼叫
 # ============================
+# Base44 同步
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 LgatUser"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0),
+            },
+            timeout=5
+        )
+        if resp.status_code != 200:
+            print(f"[Base44 Sync] 失敗: {resp.status_code} {resp.text[:100]}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
+def detect_and_save_goal_or_event(user_id, text, profile, ai_response):
+    """從對話中偵測目標/事件並存到 Base44"""
+    try:
+        # 簡單的關鍵字偵測
+        keywords_goal = ['目標', '計畫', '想要', '要達成', '設定', '目的']
+        keywords_event = ['今天', '明天', '完成', '習慣', '待辦', '打卡', '任務']
+        
+        has_goal = any(kw in text for kw in keywords_goal)
+        has_event = any(kw in text for kw in keywords_event)
+        has_completion = any(kw in text for kw in ['完成', '做完', '✅', '打卡'])
+
+        if has_goal and not has_completion:
+            # 偵測到目標設定 — 這時應該在 Dify 裡引導用戶輸入目標細節
+            # 這邊先留作擴展點
+            pass
+        elif has_completion:
+            # 偵測到完成 — 可以自動記錄事件
+            # 同樣留作擴展點
+            pass
+    except Exception as e:
+        print(f"[Goal/Event Detection] 錯誤: {e}")
+
+
+# ============================
 
 def call_dify(api_key, user_id, text, conversation_id, inputs):
     url = f'{DIFY_API_URL}/chat-messages'
@@ -379,6 +428,9 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
+
+    # 同步用戶資料到 Base44
+    sync_to_base44(user_id, profile)
 
     try:
         result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
