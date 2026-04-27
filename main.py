@@ -2,6 +2,9 @@ import os
 import sqlite3
 import threading
 import requests
+import datetime
+import json
+import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -16,6 +19,7 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
 BASE44_API = os.environ.get('BASE44_API', 'https://app-ffa38ee7.base44.app')
 
 # ============================
@@ -525,6 +529,65 @@ def save_goal_or_event_async(user_id, display_name, text):
 
 
 # ============================
+# Base44 API 呼叫
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq):
+    """背景執行：同步用戶到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json={
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "coach_tone": coach_tone,
+                "coach_style": coach_style,
+                "quote_freq": quote_freq,
+                "total_messages": 1,
+            },
+            timeout=5
+        )
+        print(f"[Base44 syncUser] status={resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 syncUser] 失敗: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
+    """背景執行：儲存目標/事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+            json={
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "entity_type": entity_type,
+                **fields
+            },
+            timeout=5
+        )
+        print(f"[Base44 saveGoalOrEvent] status={resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 saveGoalOrEvent] 失敗: {e}")
+
+def detect_goal_or_event(text):
+    """簡單的關鍵詞偵測：回傳 (entity_type, data) 或 None"""
+    # 目標關鍵詞（短語）
+    goal_keywords = ['目標', '想要', '希望', '計畫', '達成', '完成', '目的', '目標是']
+    # 事件關鍵詞
+    event_keywords = ['習慣', '待辦', '里程碑', '事件', '要做', '明天', '每天', '每週']
+
+    goal_score = sum(1 for kw in goal_keywords if kw in text)
+    event_score = sum(1 for kw in event_keywords if kw in text)
+
+    if goal_score >= 2:
+        # 嘗試提取目標標題（簡單做法：取第一句話或關鍵詞後的內容）
+        title = text[:30] if len(text) <= 30 else text[:30] + "..."
+        return ("goal", {"title": title, "description": text, "type": "short"})
+    elif event_score >= 2:
+        title = text[:20] if len(text) <= 20 else text[:20] + "..."
+        return ("event", {"title": title, "type": "todo", "note": text})
+    return None
+
+# ============================
 # LINE Webhook
 # ============================
 
@@ -543,6 +606,17 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 背景執行：同步用戶到 Base44
+    def bg_sync():
+        sync_user_to_base44(
+            user_id,
+            profile.get('display_name') or '',
+            profile.get('coach_tone') or 'balanced',
+            profile.get('coach_style') or 'exploratory',
+            profile.get('quote_freq') or 'sometimes'
+        )
+    threading.Thread(target=bg_sync, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
