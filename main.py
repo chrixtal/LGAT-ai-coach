@@ -12,6 +12,7 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
 app = FastAPI()
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # --- 環境變數 ---
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
@@ -424,6 +425,79 @@ def ask_dify(user_id, text, profile):
             "😵 我剛才靈魂出竅了一下，請再問我一次！\n\n"
             "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
         )
+
+
+# ============================
+# Base44 同步函數
+# ============================
+
+def sync_user_to_base44(user_id: str, profile: dict):
+    """背景執行緒：同步用戶資料到 Base44 資料庫"""
+    try:
+        data = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0) + 1,
+        }
+        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] ✅ 用戶同步成功 | user={user_id}")
+        else:
+            print(f"[Base44] ❌ 用戶同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def detect_and_save_goal_or_event(user_id: str, text: str, profile: dict):
+    """偵測用戶輸入中是否有目標/事件關鍵詞，自動儲存"""
+    try:
+        # 簡單的關鍵詞偵測
+        goal_keywords = ['目標', '想要', '計畫', '希望', '夢想', '想達成', '要完成']
+        event_keywords = ['待辦', '今天', '明天', '週', '習慣', '每天', '要做', '完成']
+        
+        goal_score = sum(1 for k in goal_keywords if k in text)
+        event_score = sum(1 for k in event_keywords if k in text)
+        
+        if goal_score >= 2:
+            # 偵測到目標關鍵詞
+            title = text[:30]  # 簡單取前 30 字作為標題
+            type_map = {'短期': 'short', '中期': 'medium', '長期': 'long'}
+            goal_type = next((v for k, v in type_map.items() if k in text), 'short')
+            
+            data = {
+                "entity_type": "goal",
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "title": title,
+                "description": text,
+                "type": goal_type,
+            }
+            resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=data, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] ✅ 目標已儲存")
+        
+        elif event_score >= 2:
+            # 偵測到事件關鍵詞
+            title = text[:30]
+            type_map = {'習慣': 'habit', '待辦': 'todo', '里程碑': 'milestone'}
+            event_type = next((v for k, v in type_map.items() if k in text), 'todo')
+            
+            data = {
+                "entity_type": "event",
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "title": title,
+                "type": event_type,
+            }
+            resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=data, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] ✅ 事件已儲存")
+    
+    except Exception as e:
+        print(f"[Base44] 目標/事件偵測錯誤: {e}")
+
 
 # ============================
 # 指令處理
