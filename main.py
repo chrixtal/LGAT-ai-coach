@@ -16,6 +16,10 @@ sys.path.insert(0, '/app/lgat')
 
 app = FastAPI()
 
+# Base44 API 設定
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://api.base44.com')
+
 # ============================
 # 環境變數
 # ============================
@@ -407,6 +411,77 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+# ============================
+# 偵測目標/事件並儲存到 Base44
+# ============================
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """
+    偵測用戶訊息中的目標/事件關鍵詞
+    - "我想/我要/我的目標..." → 目標
+    - "我完成了/已經做好..." → 目標進度
+    - "待辦/習慣/提醒..." → 事件
+    """
+    try:
+        # 目標偵測
+        goal_keywords = ['我想', '我要', '目標', '夢想', '計畫', '達成']
+        if any(kw in text for kw in goal_keywords):
+            # 簡單解析，抽出第一句作為目標標題
+            title = text.split('。')[0].split('，')[0][:50]
+            if len(title) > 5:
+                resp = requests.post(
+                    f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'goal',
+                        'line_user_id': line_user_id,
+                        'display_name': display_name,
+                        'title': title,
+                        'description': text,
+                        'type': 'short',  # 預設短期
+                    },
+                    timeout=5
+                )
+                if resp.ok:
+                    print(f"[Goal] 已儲存: {title}")
+
+        # 事件偵測
+        event_keywords = ['待辦', '習慣', '提醒', '今天', '明天', '明早', '下午', '晚上']
+        if any(kw in text for kw in event_keywords):
+            title = text.split('。')[0].split('，')[0][:50]
+            if len(title) > 3:
+                resp = requests.post(
+                    f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/saveGoalOrEvent',
+                    json={
+                        'entity_type': 'event',
+                        'line_user_id': line_user_id,
+                        'display_name': display_name,
+                        'title': title,
+                        'type': 'todo',
+                        'recurrence': 'none',
+                    },
+                    timeout=5
+                )
+                if resp.ok:
+                    print(f"[Event] 已儲存: {title}")
+
+        # 進度更新
+        if '完成' in text or '已經' in text or '做好' in text or '✅' in text:
+            resp = requests.post(
+                f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal_progress',
+                    'line_user_id': line_user_id,
+                    'progress_note': text[:100],
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Progress] 已記錄")
+    except Exception as e:
+        print(f"[Detect] 偵測失敗: {e}")
+
+
 
 def ask_dify(user_id, text, profile):
     """詢問 Dify AI，並自動同步到 Base44"""
