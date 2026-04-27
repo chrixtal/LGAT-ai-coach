@@ -82,6 +82,25 @@ QUOTE_OPTIONS = parse_options(os.environ.get(
 # ============================
 # FastAPI + LINE Bot 初始化
 # ============================
+# ============================
+# Base44 API 橋梁
+# ============================
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def call_base44_api(endpoint, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_URL}/functions/{endpoint}'
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Base44] {endpoint} 失敗: {resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Base44] API 呼叫失敗: {e}")
+        return None
+
 app = FastAPI()
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -480,7 +499,7 @@ def handle_message(event):
     def process_and_push():
         # 背景：同步用戶資料和偵測目標/事件（不堵塞）
         try:
-            call_base44_function('syncUser', {
+            call_base44_api('syncUser', {
                 'line_user_id': user_id,
                 'display_name': profile.get('display_name'),
                 'coach_tone': profile.get('coach_tone'),
@@ -488,23 +507,21 @@ def handle_message(event):
                 'quote_freq': profile.get('quote_freq'),
                 'total_messages': (profile.get('total_messages') or 0) + 1,
             })
-        except:
-            pass
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
 
         detected = detect_goal_or_event(user_text)
         if detected:
+            entity_type, fields = detected
             try:
-                entity_type, subtype = detected
-                call_base44_function('saveGoalOrEvent', {
+                call_base44_api('saveGoalOrEvent', {
                     'entity_type': entity_type,
                     'line_user_id': user_id,
                     'display_name': profile.get('display_name', ''),
-                    'title': user_text[:50],
-                    'type': subtype,
-                    'description': user_text,
+                    **fields,
                 })
-            except:
-                pass
+            except Exception as e:
+                print(f"[saveGoalOrEvent] 失敗: {e}")
 
         # 主流程：loading + Dify
         send_loading_animation(user_id, seconds=60)
@@ -535,3 +552,56 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+# ============================
+# 目標/事件偵測（簡易版本）
+# ============================
+def detect_goal_or_event(text):
+    """從用戶訊息偵測是否提到目標/事件，回傳 (entity_type, fields) 或 None"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想', '希望', '計畫', '打算', '想要', '達成', '實現']
+    event_keywords = ['習慣', '待辦', '完成', '打卡', '完成了', '做了', '今天']
+    
+    # 簡易判斷
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords)
+    
+    if is_goal and '目標' in text:
+        # 嘗試解析目標
+        if '短期' in text or '一個月' in text or '本周' in text:
+            goal_type = 'short'
+        elif '中期' in text or '三個月' in text or '半年' in text:
+            goal_type = 'medium'
+        else:
+            goal_type = 'long'
+        
+        # 提取目標標題（簡易：引號內或第一句）
+        if '「' in text and '」' in text:
+            title = text[text.find('「')+1:text.find('」')]
+        else:
+            title = text.split('。')[0][:30]  # 取前 30 字
+        
+        return ('goal', {'title': title, 'type': goal_type, 'description': text[:200]})
+    
+    elif is_event:
+        # 習慣、待辦、完成
+        if '習慣' in text:
+            event_type = 'habit'
+        elif '完成' in text or '完成了' in text:
+            event_type = 'todo'
+        else:
+            event_type = 'todo'
+        
+        # 提取事件標題
+        if '「' in text and '」' in text:
+            title = text[text.find('「')+1:text.find('」')]
+        else:
+            title = text.split('。')[0][:30]
+        
+        return ('event', {'title': title, 'type': event_type, 'note': text[:200]})
+    
+    return None
+
+
+
