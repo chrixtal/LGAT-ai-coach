@@ -31,6 +31,29 @@ if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
     print("⚠️ 缺少必要環境變數！檢查 LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY")
 
 # ============================
+# Base44 API
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        url = f'{BASE44_API_URL}/functions/syncUser'
+        data = {
+            'line_user_id': line_user_id,
+            'display_name': profile.get('display_name') or '',
+            'coach_tone': profile.get('coach_tone') or 'balanced',
+            'coach_style': profile.get('coach_style') or 'exploratory',
+            'quote_freq': profile.get('quote_freq') or 'sometimes',
+            'total_messages': profile.get('total_messages', 0) + 1,
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', ''),
+        }
+        requests.post(url, json=data, timeout=5)
+        print(f"[Base44] 同步用戶: {line_user_id}")
+    except Exception as e:
+        print(f"[Base44] 同步失敗: {e}")
+
+# ============================
 # 教練設定選項
 # ============================
 def parse_options(env_val):
@@ -438,23 +461,6 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
-    
-    # 背景同步用戶資料到 Base44（非同步，不阻擋回應）
-    def sync_user_bg():
-        try:
-            sync_url = "https://app-ffa38ee7.base44.app/functions/syncUser"
-            requests.post(sync_url, json={
-                "line_user_id": user_id,
-                "display_name": profile.get('display_name') or '',
-                "coach_tone": profile.get('coach_tone'),
-                "coach_style": profile.get('coach_style'),
-                "quote_freq": profile.get('quote_freq'),
-                "total_messages": (profile.get('total_messages') or 0) + 1,
-            }, timeout=5)
-        except Exception as e:
-            print(f"[syncUser] 失敗: {e}")
-    
-    threading.Thread(target=sync_user_bg, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
