@@ -545,6 +545,31 @@ def handle_message(event):
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
+    # 同步用戶資料到 Base44（背景執行，不阻擋 webhook）
+    def sync_to_base44():
+        try:
+            payload = {
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name') or '',
+                "coach_tone": profile.get('coach_tone', 'balanced'),
+                "coach_style": profile.get('coach_style', 'exploratory'),
+                "quote_freq": profile.get('quote_freq', 'sometimes'),
+                "total_messages": (profile.get('total_messages') or 0) + 1,
+            }
+            resp = requests.post(
+                'https://app-ffa38ee7.base44.app/functions/syncUser',
+                json=payload,
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[syncUser] OK | user={user_id}")
+            else:
+                print(f"[syncUser] Failed: {resp.status_code}")
+        except Exception as e:
+            print(f"[syncUser] Error: {e}")
+
+    threading.Thread(target=sync_to_base44, daemon=True).start()
+
 # ============================
 # 健康檢查
 # ============================
