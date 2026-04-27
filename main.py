@@ -515,7 +515,124 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Base44 同步與事件偵測
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """將用戶資料同步到 Base44"""
+    import os
+    base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f"{base44_url}/functions/syncUser"
+    try:
+        resp = requests.post(url, json={
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name') or '',
+            "coach_tone": profile.get('coach_tone'),
+            "coach_style": profile.get('coach_style'),
+            "quote_freq": profile.get('quote_freq'),
+            "total_messages": profile.get('total_messages', 0) + 1,
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }, timeout=5)
+        if resp.ok:
+            print(f"[Base44] 用戶 {user_id} 同步成功")
+        else:
+            print(f"[Base44] 同步失敗: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def detect_goal_or_event(user_id, text, profile):
+    """
+    偵測用戶訊息中的目標或事件關鍵詞
+    格式：
+    - 目標：「我想/要 [達成/完成] ...」、「目標是 ...」
+    - 事件：「我要 [做/完成] ...」、「今天/明天 ...」
+    - 習慣：「[每天/每週] ...」
+    """
+    import os
+    import re
+    from datetime import datetime, timedelta
+    
+    goals_keywords = ['想', '要達成', '目標', '計畫', '目標是']
+    events_keywords = ['做', '完成', '執行', '待辦', '清單']
+    habit_keywords = ['每天', '每週', '每月', '習慣', '日常']
+    
+    base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    
+    # 簡單的關鍵詞判斷
+    is_goal = any(kw in text for kw in goals_keywords)
+    is_event = any(kw in text for kw in events_keywords)
+    is_habit = any(kw in text for kw in habit_keywords)
+    
+    if is_goal:
+        # 提取目標標題（第一句或前 50 字）
+        title = text.split('。')[0][:50] if '。' in text else text[:50]
+        
+        try:
+            resp = requests.post(
+                f"{base44_url}/functions/saveGoalOrEvent",
+                json={
+                    "entity_type": "goal",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": title,
+                    "description": text,
+                    "type": "short",  # 預設短期，後續可改
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 目標已保存: {title}")
+        except Exception as e:
+            print(f"[Base44] 目標保存失敗: {e}")
+    
+    elif is_habit:
+        title = text.split('。')[0][:50] if '。' in text else text[:50]
+        recurrence = 'daily' if '每天' in text else 'weekly' if '每週' in text else 'monthly'
+        
+        try:
+            resp = requests.post(
+                f"{base44_url}/functions/saveGoalOrEvent",
+                json={
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": title,
+                    "type": "habit",
+                    "recurrence": recurrence,
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 習慣已保存: {title}")
+        except Exception as e:
+            print(f"[Base44] 習慣保存失敗: {e}")
+    
+    elif is_event:
+        title = text.split('。')[0][:50] if '。' in text else text[:50]
+        
+        try:
+            resp = requests.post(
+                f"{base44_url}/functions/saveGoalOrEvent",
+                json={
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": title,
+                    "type": "todo",
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 待辦已保存: {title}")
+        except Exception as e:
+            print(f"[Base44] 待辦保存失敗: {e}")
+
+
 def ask_dify(user_id, text, profile):
+    sync_user_to_base44(user_id, profile)
+    detect_goal_or_event(user_id, text, profile)
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
     
