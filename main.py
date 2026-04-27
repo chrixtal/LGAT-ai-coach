@@ -2,11 +2,18 @@ import os
 import sqlite3
 import threading
 import requests
+import re
+import json
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+
+# Base44 backend function URLs
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+SYNC_USER_URL = f"{BASE44_APP_URL}/functions/syncUser"
+SAVE_GOAL_EVENT_URL = f"{BASE44_APP_URL}/functions/saveGoalOrEvent"
 import re
 
 app = FastAPI()
@@ -644,4 +651,95 @@ async def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)# ============================
+# Base44 後台同步
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name') or '',
+            "coach_tone": profile.get('coach_tone') or 'balanced',
+            "coach_style": profile.get('coach_style') or 'exploratory',
+            "quote_freq": profile.get('quote_freq') or 'sometimes',
+            "total_messages": profile.get('total_messages', 0) + 1,
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+            "plan": profile.get('plan', 'free'),
+        }
+        resp = requests.post(SYNC_USER_URL, json=payload, timeout=5)
+        if resp.status_code != 200:
+            print(f"[syncUser] 失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[syncUser] 錯誤: {e}")
+
+def detect_and_save_goal_event(user_id, display_name, dify_response):
+    """從 Dify 回應中偵測目標/事件標記，自動存到 Base44
+    
+    支援標記格式：
+    [GOAL:標題|描述|類型]  => 存為目標（short/medium/long）
+    [EVENT:標題|類型]       => 存為事件（habit/todo/milestone）
+    [PROGRESS:標題|進度]    => 更新現有目標進度
+    """
+    try:
+        # 偵測 [GOAL:...] 標記
+        goal_pattern = r'\[GOAL:([^\|]+)\|([^\|]*)\|([^\]]*)\]'
+        for match in re.finditer(goal_pattern, dify_response):
+            title, desc, gtype = match.groups()
+            title = title.strip()
+            desc = desc.strip() or ''
+            gtype = gtype.strip() or 'short'
+            
+            payload = {
+                "entity_type": "goal",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": title,
+                "description": desc,
+                "type": gtype if gtype in ['short', 'medium', 'long'] else 'short',
+            }
+            resp = requests.post(SAVE_GOAL_EVENT_URL, json=payload, timeout=5)
+            print(f"[saveGoal] {title}: {resp.status_code}")
+        
+        # 偵測 [EVENT:...] 標記
+        event_pattern = r'\[EVENT:([^\|]+)\|([^\|]*)\|?([^\]]*)\]'
+        for match in re.finditer(event_pattern, dify_response):
+            title, etype, recur = match.groups()
+            title = title.strip()
+            etype = etype.strip() or 'todo'
+            recur = recur.strip() or 'none'
+            
+            payload = {
+                "entity_type": "event",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": title,
+                "type": etype if etype in ['habit', 'todo', 'milestone', 'reminder'] else 'todo',
+                "recurrence": recur if recur in ['none', 'daily', 'weekly', 'monthly'] else 'none',
+            }
+            resp = requests.post(SAVE_GOAL_EVENT_URL, json=payload, timeout=5)
+            print(f"[saveEvent] {title}: {resp.status_code}")
+        
+        # 偵測 [PROGRESS:...] 標記
+        progress_pattern = r'\[PROGRESS:([^\|]+)\|([^\]]*)\]'
+        for match in re.finditer(progress_pattern, dify_response):
+            title, progress_note = match.groups()
+            title = title.strip()
+            progress_note = progress_note.strip()
+            
+            payload = {
+                "entity_type": "goal_progress",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": title,
+                "progress_note": progress_note,
+            }
+            resp = requests.post(SAVE_GOAL_EVENT_URL, json=payload, timeout=5)
+            print(f"[saveProgress] {title}: {resp.status_code}")
+    except Exception as e:
+        print(f"[detectAndSave] 錯誤: {e}")
+
+
+
