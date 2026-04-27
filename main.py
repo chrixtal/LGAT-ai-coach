@@ -76,6 +76,32 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+# ============================
+# 主動提醒 Cron Job
+# ============================
+
+def reminder_cron():
+    """每分鐘檢查一次，發送該發的提醒"""
+    BASE44_FUNCTION_URL = "https://app-ffa38ee7.base44.app/functions/sendReminders"
+    while True:
+        try:
+            threading.Event().wait(60)  # 每 60 秒執行一次
+            resp = requests.post(BASE44_FUNCTION_URL, json={}, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get('sent_count', 0) > 0:
+                    print(f"[Reminder Cron] ✅ 已發送 {data['sent_count']} 則提醒到 {data.get('sent', [])}")
+        except Exception as e:
+            print(f"[Reminder Cron] 錯誤: {e}")
+
+def start_reminder_cron():
+    """啟動背景提醒執行緒"""
+    thread = threading.Thread(target=reminder_cron, daemon=True)
+    thread.start()
+    print("[Reminder Cron] 已啟動")
+
+# ============================
 init_db()
 
 # ============================
@@ -682,5 +708,6 @@ async def health():
     return {"status": "ok"}
 
 if __name__ == "__main__":
+    start_reminder_cron()
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
