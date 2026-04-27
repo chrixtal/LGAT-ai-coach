@@ -16,7 +16,7 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
-BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
     print("錯誤: 缺少必要的環境變數設定。")
@@ -182,7 +182,7 @@ def send_loading_animation(user_id, seconds=20):
 def sync_to_backend(user_id, profile):
     """呼叫 Base44 syncUser function"""
     try:
-        url = f'{BASE44_APP_URL}/functions/syncUser'
+        url = f'{BASE44_API_URL}/functions/syncUser'
         data = {
             'line_user_id': user_id,
             'display_name': profile.get('display_name', ''),
@@ -201,7 +201,7 @@ def sync_to_backend(user_id, profile):
 def detect_and_save_goal_or_event(user_id, text, profile, ai_response):
     """偵測用戶是否提到目標或事件，自動儲存到 Base44"""
     try:
-        url = f'{BASE44_APP_URL}/functions/saveGoalOrEvent'
+        url = f'{BASE44_API_URL}/functions/saveGoalOrEvent'
         
         # 關鍵詞偵測
         goal_keywords = ["目標", "想要", "要達成", "計畫", "希望", "我要", "決定", "設定"]
@@ -374,6 +374,40 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+# ============================
+# Base44 API 串接
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+BASE44_API_KEY = os.environ.get('BASE44_API_KEY', '')
+
+def sync_user_to_base44(line_user_id, profile):
+    """呼叫 syncUser backend function 同步用戶資料到 Base44"""
+    if not BASE44_API_KEY:
+        return False
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            headers={'Authorization': f'Bearer {BASE44_API_KEY}'},
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone') or 'balanced',
+                'coach_style': profile.get('coach_style') or 'exploratory',
+                'quote_freq': profile.get('quote_freq') or 'sometimes',
+            },
+            timeout=5
+        )
+        if resp.status_code in [200, 201]:
+            print(f"[Base44] 同步成功: {line_user_id}")
+            return True
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code} - {resp.text}")
+            return False
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+        return False
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
