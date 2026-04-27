@@ -502,6 +502,26 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 每次對話都同步用戶資料到 Base44
+    try:
+        sync_resp = requests.post(
+            'https://app-ffa38ee7.base44.app/functions/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': (profile.get('total_messages', 0) or 0) + 1,
+            },
+            timeout=3
+        )
+        if sync_resp.status_code == 200:
+            profile['total_messages'] = (profile.get('total_messages', 0) or 0) + 1
+            save_profile(user_id, total_messages=profile['total_messages'])
+    except Exception as e:
+        print(f"[syncUser] 同步失敗: {e}")
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
