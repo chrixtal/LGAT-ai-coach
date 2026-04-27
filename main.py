@@ -17,6 +17,10 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+
+# --- Base44 Backend API ---
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_BASE = f'https://app-ffa38ee7.base44.app/functions'
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
@@ -466,6 +470,36 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 Backend Function 呼叫
+# ============================
+
+def call_backend_function(func_name: str, payload: dict) -> dict:
+    """呼叫 Base44 backend function（sync_user, save_goal_or_event 等）"""
+    try:
+        url = f'{BASE44_API_BASE}/{func_name}'
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44] {func_name} 呼叫失敗: {e}")
+        return {}
+
+def sync_user_to_base44(user_id: str, profile: dict, message_count: int = 0):
+    """同步用戶資料到 Base44（每次對話都呼叫）"""
+    try:
+        call_backend_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': message_count,
+        })
+    except Exception as e:
+        print(f"[Base44] sync_user_to_base44 失敗: {e}")
+
 # ============================
 # LINE Webhook
 # ============================
@@ -485,6 +519,11 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+
+    # 同步用戶到 Base44
+    msg_count = (profile.get('total_messages', 0) or 0) + 1
+    save_profile(user_id, total_messages=msg_count)
+    sync_user_to_base44(user_id, get_profile(user_id), msg_count)
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
