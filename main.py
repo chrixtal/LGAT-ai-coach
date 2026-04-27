@@ -354,6 +354,56 @@ def build_dify_inputs(profile):
     }
 
 # ============================
+# ============================
+# Base44 API 呼叫（資料同步）
+# ============================
+
+BASE44_API_URL = 'https://app-ffa38ee7.base44.app/functions'
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 後台"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] 用戶同步成功: {user_id}")
+            return True
+    except Exception as e:
+        print(f"[Base44] 用戶同步失敗: {e}")
+    return False
+
+def save_goal_or_event_to_base44(user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/saveGoalOrEvent',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'entity_type': entity_type,
+                **fields
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] {entity_type} 已儲存: {fields.get('title', '?')}")
+            return True
+    except Exception as e:
+        print(f"[Base44] 儲存失敗: {e}")
+    return False
+
 # Dify API 呼叫
 # ============================
 
@@ -457,6 +507,9 @@ def ask_dify(user_id, text, profile):
             "😵 我剛才靈魂出竅了一下，請再問我一次！\n\n"
             "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
         )
+    finally:
+        # 無論成功或失敗，都嘗試同步用戶資料到 Base44
+        sync_user_to_base44(user_id, profile)
 
 # ============================
 # 指令處理
