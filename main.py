@@ -327,6 +327,36 @@ def handle_onboarding(line_user_id, text, profile):
         return f"太棒了，{name}！✨ 設定完成！\n\n從現在開始我是你的專屬教練了 💪"
 
     return None
+# ============================
+# Backend Function 呼叫
+# ============================
+
+BACKEND_URL = os.environ.get('BACKEND_URL', 'https://app-ffa38ee7.base44.app')
+
+def call_backend_function(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BACKEND_URL}/functions/{function_name}'
+        response = requests.post(url, json=payload, timeout=10)
+        return response.json() if response.ok else None
+    except Exception as e:
+        print(f"[Backend] {function_name} 失敗: {e}")
+        return None
+
+def sync_user_to_backend(user_id, profile):
+    """將用戶資料同步到 Base44"""
+    payload = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0),
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+    }
+    return call_backend_function('syncUser', payload)
+
 
 # ============================
 # Dify
