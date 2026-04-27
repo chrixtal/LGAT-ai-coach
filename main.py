@@ -438,6 +438,23 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 背景同步用戶資料到 Base44（非同步，不阻擋回應）
+    def sync_user_bg():
+        try:
+            sync_url = "https://app-ffa38ee7.base44.app/functions/syncUser"
+            requests.post(sync_url, json={
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name') or '',
+                "coach_tone": profile.get('coach_tone'),
+                "coach_style": profile.get('coach_style'),
+                "quote_freq": profile.get('quote_freq'),
+                "total_messages": (profile.get('total_messages') or 0) + 1,
+            }, timeout=5)
+        except Exception as e:
+            print(f"[syncUser] 失敗: {e}")
+    
+    threading.Thread(target=sync_user_bg, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
