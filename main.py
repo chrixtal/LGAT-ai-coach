@@ -563,7 +563,21 @@ def handle_message(event):
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
 
+    # 背景執行：同步用戶資料 + 自動偵測目標/事件
+    def bg_sync_and_detect():
+        profile = get_profile(user_id)
+        sync_user(
+            user_id,
+            display_name=profile.get('display_name', ''),
+            coach_tone=profile.get('coach_tone', ''),
+            coach_style=profile.get('coach_style', ''),
+            quote_freq=profile.get('quote_freq', ''),
+            total_messages=profile.get('total_messages', 0) + 1
+        )
+        detect_and_save_goal_or_event(user_id, profile.get('display_name', ''), user_text)
+
     threading.Thread(target=process_and_push, daemon=True).start()
+    threading.Thread(target=bg_sync_and_detect, daemon=True).start()
 
 # ============================
 # 健康檢查
