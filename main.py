@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+from datetime import datetime
 
 # --- Base44 API 配置 ---
 BASE44_APP_ID = '69e35caa4e5d9a67dd7dd6e1'
@@ -754,6 +755,96 @@ def handle_command(user_id, text, profile):
 # LINE Webhook
 # ============================
 
+
+# ============================
+# BASE44 Backend 整合
+# ============================
+
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 BASE44 後台"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone') or 'balanced',
+                'coach_style': profile.get('coach_style') or 'exploratory',
+                'quote_freq': profile.get('quote_freq') or 'sometimes',
+                'total_messages': profile.get('total_messages', 0),
+            },
+            timeout=3
+        )
+        if resp.status_code == 200:
+            print(f"[BASE44] 用戶 {line_user_id} 同步成功")
+        else:
+            print(f"[BASE44] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[BASE44] 同步錯誤: {e}")
+
+def detect_goal_or_event(user_text, dify_answer):
+    """簡單啟發式地偵測用戶是否在設定目標或事件"""
+    keywords_goal = ['目標', '想要', '計劃', '打算', '決定', '要成為', '希望', '夢想', '新年目標']
+    keywords_event = ['今天', '明天', '待辦', '要做', '記住', '提醒', '習慣', '完成', '打卡']
+    
+    combined = (user_text + dify_answer).lower()
+    
+    # 簡單判斷：看關鍵字出現次數
+    goal_score = sum(1 for kw in keywords_goal if kw in combined)
+    event_score = sum(1 for kw in keywords_event if kw in combined)
+    
+    return {
+        'is_goal': goal_score >= 2,
+        'is_event': event_score >= 2,
+        'goal_score': goal_score,
+        'event_score': event_score,
+    }
+
+def save_goal_to_base44(line_user_id, display_name, title, description='', goal_type='short'):
+    """存儲目標到 BASE44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+            json={
+                'entity_type': 'goal',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'description': description,
+                'type': goal_type,
+            },
+            timeout=3
+        )
+        if resp.status_code == 200:
+            print(f"[BASE44] 目標 '{title}' 儲存成功")
+        else:
+            print(f"[BASE44] 儲存目標失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[BASE44] 儲存目標錯誤: {e}")
+
+def save_event_to_base44(line_user_id, display_name, title, event_type='todo'):
+    """存儲事件到 BASE44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+            json={
+                'entity_type': 'event',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': event_type,
+            },
+            timeout=3
+        )
+        if resp.status_code == 200:
+            print(f"[BASE44] 事件 '{title}' 儲存成功")
+        else:
+            print(f"[BASE44] 儲存事件失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[BASE44] 儲存事件錯誤: {e}")
+
 @app.post("/callback")
 async def callback(request: Request):
     signature = request.headers.get('X-Line-Signature', '')
@@ -773,6 +864,29 @@ def handle_message(event):
     # 累計訊息數
     total = (profile.get('total_messages') or 0) + 1
     save_profile(user_id, total_messages=total)
+
+    # 同步用戶資料到 Base44
+    def sync_to_base44():
+        try:
+            base44_url = os.environ.get('BASE44_SYNC_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
+            requests.post(
+                base44_url,
+                json={
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'coach_tone': profile.get('coach_tone', 'balanced'),
+                    'coach_style': profile.get('coach_style', 'exploratory'),
+                    'quote_freq': profile.get('quote_freq', 'sometimes'),
+                    'total_messages': total,
+                    'reminder_enabled': profile.get('reminder_enabled', False),
+                    'reminder_time': profile.get('reminder_time', '08:00'),
+                },
+                timeout=3
+            )
+        except Exception as e:
+            print(f"[Base44 Sync] 失敗: {e}")
+    
+    threading.Thread(target=sync_to_base44, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
