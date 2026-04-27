@@ -2,6 +2,9 @@ import os
 import sqlite3
 import threading
 import requests
+import re
+import json
+from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -625,6 +628,19 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 背景同步用戶資料到 Base44
+    def _sync():
+        line_name = get_line_display_name(user_id)
+        if line_name:
+            sync_user_to_base44(user_id, line_name, profile)
+    threading.Thread(target=_sync, daemon=True).start()
+    
+    # 偵測並保存目標/事件
+    def _detect():
+        line_name = get_line_display_name(user_id) or profile.get('display_name', '')
+        detect_and_save_goal_or_event(user_id, line_name, user_text)
+    threading.Thread(target=_detect, daemon=True).start()
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
@@ -658,7 +674,80 @@ def handle_message(event):
 
     threading.Thread(target=process_background, daemon=True).start()
 
+
 # ============================
+# BASE44 API 橋接
+# ============================
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_API_KEY = os.environ.get('BASE44_API_KEY', '')
+
+def call_base44(function_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f"{BASE44_API_URL}/functions/{function_name}"
+        resp = requests.post(url, json=payload, timeout=10)
+        return resp.json() if resp.status_code == 200 else None
+    except Exception as e:
+        print(f"[Base44] {function_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": user_id,
+        "display_name": display_name,
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0) + 1,
+    }
+    return call_base44("syncUser", payload)
+
+def detect_and_save_goal_or_event(user_id, display_name, text):
+    """偵測用戶訊息中的目標/事件關鍵詞，自動儲存"""
+    # 目標關鍵詞
+    goal_patterns = {
+        'short': [r'(今天|這週|本月).*要?.*?完成', r'短期目標', r'想要'],
+        'medium': [r'(這個月|三個月|半年).*要?.*?達成', r'中期目標', r'計畫'],
+        'long': [r'(年度|長期|明年|未來).*目標', r'夢想', r'願景'],
+    }
+    
+    # 事件關鍵詞
+    event_patterns = {
+        'habit': [r'(每天|每週|每月|定期).*?做', r'養成.*?習慣', r'打卡', r'堅持'],
+        'todo': [r'待辦|要做|得做|需要|必須'],
+        'milestone': [r'達成|完成|突破', r'里程碑'],
+    }
+    
+    detected = []
+    
+    # 檢查目標
+    for goal_type, patterns in goal_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, text):
+                detected.append(('goal', goal_type, text[:50]))
+                break
+    
+    # 檢查事件
+    for event_type, patterns in event_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, text):
+                detected.append(('event', event_type, text[:50]))
+                break
+    
+    # 儲存到 Base44（背景執行，不阻塞）
+    for entity_type, sub_type, preview in detected:
+        payload = {
+            "entity_type": entity_type,
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "title": preview,
+            "type": sub_type,
+        }
+        threading.Thread(target=lambda p=payload: call_base44("saveGoalOrEvent", p), daemon=True).start()
+        print(f"[detect] {entity_type}/{sub_type} from: {preview}")
+
+# # ============================
 # 健康檢查
 # ============================
 
