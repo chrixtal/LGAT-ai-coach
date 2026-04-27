@@ -558,6 +558,99 @@ def detect_and_save_goal_or_event(user_id, display_name, ai_response):
             recurrence=recurrence.strip() if recurrence else 'none'
         )
 
+
+# ============================
+# Base44 API 整合
+# ============================
+
+def sync_user_to_base44(user_id, display_name, profile):
+    """同步用戶資料到 Base44 資料庫"""
+    try:
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+        resp = requests.post(
+            f'{base44_url}/syncUser',
+            json={
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'coach_tone': profile.get('coach_tone'),
+                'coach_style': profile.get('coach_style'),
+                'quote_freq': profile.get('quote_freq'),
+                'total_messages': profile.get('total_messages', 0) + 1,
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser 成功 | user={user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, dify_response):
+    """從 Dify 回應中偵測並保存目標/事件"""
+    try:
+        # 簡單的標記偵測：
+        # [GOAL:title|description|type] - 目標
+        # [EVENT:title|type] - 事件
+        # [PROGRESS:title|note] - 進度更新
+        import re
+        
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+        
+        # 偵測 [GOAL:...]
+        goal_matches = re.findall(r'\[GOAL:([^|]+)\|([^|]*)\|([^\]]*)\]', dify_response)
+        for title, desc, goal_type in goal_matches:
+            requests.post(
+                f'{base44_url}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'description': desc.strip(),
+                    'type': goal_type.strip() or 'short',
+                },
+                timeout=5
+            )
+            print(f"[Base44] 儲存目標: {title}")
+        
+        # 偵測 [EVENT:...]
+        event_matches = re.findall(r'\[EVENT:([^|]+)\|([^\]]*)\]', dify_response)
+        for title, event_type in event_matches:
+            requests.post(
+                f'{base44_url}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'type': event_type.strip() or 'todo',
+                },
+                timeout=5
+            )
+            print(f"[Base44] 儲存事件: {title}")
+        
+        # 偵測 [PROGRESS:...]
+        progress_matches = re.findall(r'\[PROGRESS:([^|]+)\|([^\]]*)\]', dify_response)
+        for title, note in progress_matches:
+            requests.post(
+                f'{base44_url}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal_progress',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'progress_note': note.strip(),
+                },
+                timeout=5
+            )
+            print(f"[Base44] 更新進度: {title}")
+    except Exception as e:
+        print(f"[Base44] 偵測目標/事件錯誤: {e}")
+
+
 def ask_dify(user_id, text, profile):
     # 每次對話時同步用戶資料到 Base44
     threading.Thread(target=sync_user_to_base44, args=(user_id, profile), daemon=True).start()
