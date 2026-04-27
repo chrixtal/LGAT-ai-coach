@@ -577,6 +577,58 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 API 呼叫（資料同步）
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages=0):
+    """同步用戶資料到 Base44（每次對話都呼叫）"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+                'total_messages': total_messages,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"[syncUser] ✅ {line_user_id}")
+        else:
+            print(f"[syncUser] ❌ {line_user_id} | {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44（entity_type: 'goal' / 'event' / 'goal_progress'）"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'entity_type': entity_type,
+                **fields,
+            },
+            timeout=5
+        )
+        if resp.status_code == 200:
+            result = resp.json().get('result', {})
+            print(f"[saveGoalOrEvent] ✅ {entity_type} | {line_user_id}")
+            return result
+        else:
+            print(f"[saveGoalOrEvent] ❌ {resp.status_code}")
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 錯誤: {e}")
+    return None
+
 # ============================
 # LINE Webhook
 # ============================
@@ -618,7 +670,14 @@ def handle_message(event):
         
         # 1. 同步用戶資料到 Base44
         try:
-            sync_to_base44(user_id, current_profile)
+            sync_user_to_base44(
+                user_id,
+                current_profile.get('display_name') or '用戶',
+                current_profile.get('coach_tone', 'balanced'),
+                current_profile.get('coach_style', 'exploratory'),
+                current_profile.get('quote_freq', 'sometimes'),
+                current_profile.get('total_messages', 0)
+            )
         except Exception as e:
             print(f"[syncUser] 失敗: {e}")
         
@@ -632,8 +691,15 @@ def handle_message(event):
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
             # 同步用戶資料到 Base44
-            sync_to_base44(user_id, current_profile)
-            detect_and_save_goal_or_event(user_id, user_text, ai_response, current_profile)
+            sync_user_to_base44(
+                user_id,
+                current_profile.get('display_name') or '用戶',
+                current_profile.get('coach_tone', 'balanced'),
+                current_profile.get('coach_style', 'exploratory'),
+                current_profile.get('quote_freq', 'sometimes'),
+                current_profile.get('total_messages', 0)
+            )
+            # detect_and_save_goal_or_event(user_id, user_text, ai_response, current_profile)  # TODO: 需實作自動偵測目標/事件的邏輯
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
