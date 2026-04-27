@@ -2,6 +2,7 @@ import os
 import sqlite3
 import threading
 import requests
+import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -10,16 +11,16 @@ import uvicorn
 
 app = FastAPI()
 
-# --- 環境變數 ---
+# --- \u74b0\u5883\u8b8a\u6578 ---
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
-BASE44_APP_URL = 'https://app-ffa38ee7.base44.app'
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
 
 # ============================
-# 教練設定
+# \u6559\u7df4\u8a2d\u5b9a\uff08\u5f9e\u74b0\u5883\u8b8a\u6578\u8b80\u53d6\uff09
 # ============================
 def _parse_options(env_val):
     result = {}
@@ -31,26 +32,26 @@ def _parse_options(env_val):
 
 TONE_OPTIONS = _parse_options(os.environ.get(
     'COACH_TONE_OPTIONS',
-    'strict:嚴格督促型（推你一把，不留情面）:嚴格督促|gentle:溫柔支持型（像朋友一樣陪伴你）:溫柔支持|balanced:平衡理性型（視情況調整）:平衡理性'
+    'strict:\u56b4\u683c\u7763\u4fc3\u578b\uff08\u63a8\u4f60\u4e00\u628a\uff0c\u4e0d\u7559\u60c5\u9762\uff09:\u56b4\u683c\u7763\u4fc3|gentle:\u6eab\u67d4\u652f\u6301\u578b\uff08\u50cf\u671b\u53cb\u4e00\u6a23\u9678\u4f34\u4f60\uff09:\u6eab\u67d4\u652f\u6301|balanced:\u5e73\u8861\u7406\u6027\u578b\uff08\u8996\u60c5\u6cc1\u8abf\u6574\uff09:\u5e73\u8861\u7406\u6027'
 ))
 
 STYLE_OPTIONS = _parse_options(os.environ.get(
     'COACH_STYLE_OPTIONS',
-    'direct:直接說重點（我要答案，不要繞彎子）:直接說重點|exploratory:循循善誘（陪我慢慢想清楚）:循循善誘、引導探索'
+    'direct:\u76f4\u63a5\u8aaa\u91cd\u9ede\uff08\u6211\u8981\u7b54\u6848\uff0c\u4e0d\u8981\u7e9e\u5f4e\u5b50\uff09:\u76f4\u63a5\u8aaa\u91cd\u9ede|exploratory:\u5faa\u5faa\u5584\u8a95\uff08\u9663\u6211\u6162\u6162\u60f3\u6e05\u695a\uff09:\u5faa\u5faa\u5584\u8a95\u3001\u5f15\u5c0e\u63a2\u7d22'
 ))
 
 QUOTE_OPTIONS = _parse_options(os.environ.get(
     'COACH_QUOTE_OPTIONS',
-    'often:多一點，我喜歡有根據的東西:頻繁引用名言、學術理論或研究數據來增加說服力|sometimes:偶爾就好，不要太多:偶爾適時引用即可|never:不用，我比較喜歡簡單直白:不需要引用，保持簡單直白'
+    'often:\u591a\u4e00\u9ede\uff0c\u6211\u559c\u6b61\u6709\u6839\u64da\u7684\u6771\u897f:\u9801\u7e41\u5f15\u7528\u540d\u8a00\u3001\u5b78\u8853\u7406\u8ad6\u6216\u7814\u7a76\u6578\u64da\u4f86\u5f4e\u52a0\u8aaa\u670d\u529b|sometimes:\u5076\u723e\u5c31\u597d\uff0c\u4e0d\u8981\u592a\u591a:\u5076\u723e\u9069\u6642\u5f15\u7528\u5373\u53ef|never:\u4e0d\u7528\uff0c\u6211\u6bd4\u8f03\u559c\u6b61\u7c21\u55ae\u76f4\u767d:\u4e0d\u9700\u8981\u5f15\u7528\uff0c\u4fdd\u6301\u7c21\u55ae\u76f4\u767d'
 ))
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
-    print("錯誤: 缺少必要的環境變數設定。")
+    print("\u932f\u8aa4: \u7f3a\u5c11\u5fc5\u8981\u7684\u74b0\u5883\u8b8a\u6578\u8a2d\u5b9a\u3002\u8acb\u691c\u67e5 Zeabur \u7684 Variables \u8a2d\u5b9a\u3002")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# --- SQLite 初始化 ---
+# --- SQLite \u521d\u59cb\u5316 ---
 DB_PATH = os.environ.get('DB_PATH', '/data/lgat.db')
 
 def init_db():
@@ -74,6 +75,7 @@ def init_db():
             quote_freq TEXT DEFAULT 'sometimes',
             onboarding_done INTEGER DEFAULT 0,
             onboarding_step INTEGER DEFAULT 0,
+            total_messages INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -132,6 +134,7 @@ def get_profile(line_user_id):
         'quote_freq': 'sometimes',
         'onboarding_done': 0,
         'onboarding_step': 0,
+        'total_messages': 0,
     }
 
 def save_profile(line_user_id, **kwargs):
@@ -151,14 +154,16 @@ def save_profile(line_user_id, **kwargs):
 # ============================
 
 def get_line_display_name(user_id):
+    """?\u5f9e LINE API \u62ac\u7528\u6236\u6232\u7a30\uff0c\u5931\u6557\u56de\u50b3\u7a7a\u5b57\u4e32"""
     try:
         profile = line_bot_api.get_profile(user_id)
         return profile.display_name or ''
     except Exception as e:
-        print(f"[LINE] 無法取得暱稱: {e}")
+        print(f"[LINE] \u7121\u6cd5\u53d6\u5f97\u6232\u7a43: {e}")
         return ''
 
 def send_loading_animation(user_id, seconds=20):
+    """?\u4f46\u7d46 LINE loading animation API\uff0c\u5c0d\u8a71\u6846\u986f\u793a\u4e09\u500b\u5f69\u8272\u9ede"""
     try:
         resp = requests.post(
             'https://api.line.me/v2/bot/chat/loading/start',
@@ -171,186 +176,204 @@ def send_loading_animation(user_id, seconds=20):
         )
         print(f"[LINE Loading] status={resp.status_code}")
     except Exception as e:
-        print(f"[LINE Loading] 失敗: {e}")
+        print(f"[LINE Loading] \u5931\u6557: {e}")
 
 # ============================
-# 偵測目標/事件
+# Base44 \u540c\u6b65 & \u81ea\u52d5\u5132\u5b58
 # ============================
 
-def detect_goal_or_event(user_text):
-    """簡單的關鍵詞偵測"""
-    text_lower = user_text.lower()
-    
-    goal_keywords = ['想要', '目標是', '計畫', '要完成', '想完成', '想達成', '我要', '希望', '夢想']
-    event_keywords = ['完成', '做了', '已經', '打卡', '發生', '需要', '明天', '後天', '今天', '習慣']
-    
-    goal_score = sum(1 for kw in goal_keywords if kw in text_lower)
-    event_score = sum(1 for kw in event_keywords if kw in text_lower)
-    
-    title = user_text[:50] if len(user_text) > 50 else user_text
-    
-    if goal_score >= 2:
-        return ('goal', {'title': title, 'type': 'short'})
-    elif event_score >= 2:
-        event_type = 'habit' if '習慣' in text_lower else 'todo'
-        return ('event', {'title': title, 'type': event_type})
-    
-    return (None, None)
+def sync_user_to_base44(line_user_id):
+    """\u540c\u6b65\u7528\u6236\u8cc7\u6599\u5230 Base44 LgatUser \u8868"""
+    profile = get_profile(line_user_id)
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": (profile.get('total_messages', 0) or 0) + 1,
+    }
+    try:
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json=payload,
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[syncUser] {line_user_id} \u540c\u6b65\u6210\u529f")
+            save_profile(line_user_id, total_messages=payload["total_messages"])
+        else:
+            print(f"[syncUser] \u5931\u6557: {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] \u7570\u5e38: {e}")
 
-def sync_user_to_base44_async(user_id, profile):
-    """背景執行：同步用戶到 Base44"""
-    def sync():
-        try:
-            payload = {
-                "line_user_id": user_id,
-                "display_name": profile.get('display_name') or '',
-                "coach_tone": profile.get('coach_tone') or 'balanced',
-                "coach_style": profile.get('coach_style') or 'exploratory',
-                "quote_freq": profile.get('quote_freq') or 'sometimes',
-                "total_messages": profile.get('total_messages', 0) + 1,
-            }
-            resp = requests.post(
-                f'{BASE44_APP_URL}/functions/syncUser',
-                json=payload,
-                timeout=5
-            )
-            if resp.ok:
-                print(f"[syncUser] ✅ {user_id}")
-            else:
-                print(f"[syncUser] ⚠️ {resp.status_code}: {resp.text}")
-        except Exception as e:
-            print(f"[syncUser] 失敗: {e}")
+def detect_and_save_goal_or_event(line_user_id, user_text, profile):
+    """\u81ea\u52d5\u507d\u6a19\u76ee\u6a19/\u4e8b\u4ef6\u95dc\u9375\u8a5e\u4e26\u5b58\u5230 Base44"""
+    keywords_goal = ['\u76ee\u6a19', '\u60f3', '\u8a08\u7b56', '\u5922\u60f3', '\u5e0c\u671b', '\u60f3\u8981', '\u8a2d\u5b9a', '\u9054\u6210']
+    keywords_event = ['\u5b8c\u6210', '\u505a', '\u7fd2\u6163', '\u6253\u5361', '\u5f85\u8fa6', '\u4efb\u52d9', '\u660e\u5929', '\u4eca\u5929']
     
-    threading.Thread(target=sync, daemon=True).start()
-
-def save_goal_or_event_async(user_id, display_name, entity_type, data):
-    """背景執行：儲存目標或事件"""
-    def save():
+    score_goal = sum(user_text.count(kw) for kw in keywords_goal)
+    score_event = sum(user_text.count(kw) for kw in keywords_event)
+    
+    if score_goal >= 2:
+        match = re.search(r'(\u6211\u60f3|\u8a08\u7b56|\u76ee\u6a19|\u5922\u60f3|\u5e0c\u671b)([^\u3002\n]+)', user_text)
+        title = match.group(2).strip() if match else user_text[:30]
+        
+        payload = {
+            "entity_type": "goal",
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "title": title,
+            "description": user_text,
+            "type": "short",
+        }
         try:
-            payload = {
-                "entity_type": entity_type,
-                "line_user_id": user_id,
-                "display_name": display_name,
-                **data
-            }
             resp = requests.post(
                 f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
                 json=payload,
                 timeout=5
             )
             if resp.ok:
-                print(f"[saveGoalOrEvent] ✅ {entity_type} for {user_id}")
+                print(f"[saveGoal] {line_user_id} \u5df2\u5132\u5b58: {title}")
             else:
-                print(f"[saveGoalOrEvent] ⚠️ {resp.status_code}: {resp.text}")
+                print(f"[saveGoal] \u5931\u6557: {resp.status_code}")
         except Exception as e:
-            print(f"[saveGoalOrEvent] 失敗: {e}")
+            print(f"[saveGoal] \u7570\u5e38: {e}")
     
-    threading.Thread(target=save, daemon=True).start()
+    if score_event >= 2:
+        match = re.search(r'(\u5b8c\u6210|\u505a|\u7fd2\u6146|\u6253\u5361|\u5f85\u8fa6)([^\u3002\n]+)', user_text)
+        title = match.group(2).strip() if match else user_text[:30]
+        
+        payload = {
+            "entity_type": "event",
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "title": title,
+            "type": "todo",
+        }
+        try:
+            resp = requests.post(
+                f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[saveEvent] {line_user_id} \u5df2\u5132\u5b58: {title}")
+            else:
+                print(f"[saveEvent] \u5931\u6557: {resp.status_code}")
+        except Exception as e:
+            print(f"[saveEvent] \u7570\u5e38: {e}")
 
 # ============================
-# 問卷 Onboarding
+# \u554f\u5377 Onboarding
 # ============================
 
 def _build_options_text(options):
-    emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣']
+    emojis = ['1\ufe0f\u20e3', '2\ufe0f\u20e3', '3\ufe0f\u20e3', '4\ufe0f\u20e3', '5\ufe0f\u20e3']
     return '\n'.join(f"{emojis[i]} {v['label']}" for i, v in enumerate(options.values()))
 
 def _tone_question():
-    return "❷ 你喜歡什麼樣的教練語氣？\n\n請輸入數字：\n" + _build_options_text(TONE_OPTIONS)
+    return "\u2772 \u4f60\u559c\u6b61\u4ec0\u9ebc\u6a23\u7684\u6559\u7df4\u8a9e\u6c23\uff1f\n\n\u8acb\u8f38\u5165\u6578\u5b57\uff1a\n" + _build_options_text(TONE_OPTIONS)
 
 def _style_question():
-    return "❸ 你習慣哪種溝通方式？\n\n請輸入數字：\n" + _build_options_text(STYLE_OPTIONS)
+    return "\u2773 \u4f60\u7fd2\u6146\u54ea\u7a2e\u6eab\u901a\u65b9\u5f0f\uff1f\n\n\u8acb\u8f38\u5165\u6578\u5b57\uff1a\n" + _build_options_text(STYLE_OPTIONS)
 
 def _quote_question():
-    return "❹ 最後一個問題！\n\n你喜歡我在對話中引用名言、學術理論或研究嗎？\n\n請輸入數字：\n" + _build_options_text(QUOTE_OPTIONS)
+    return "\u2774 \u6700\u5f8c\u4e00\u500b\u554f\u984c\uff01\n\n\u4f60\u559c\u6b61\u6211\u5728\u5c0d\u8a71\u4e2d\u5f15\u7528\u540d\u8a00\u3001\u5b78\u8853\u7406\u8ad6\u6216\u7814\u7a76\u55ce\uff1f\n\n\u8acb\u8f38\u5165\u6578\u5b57\uff1a\n" + _build_options_text(QUOTE_OPTIONS)
 
 def handle_onboarding(line_user_id, text, profile):
+    """\u56de\u50b3 None \u8868\u793a onboarding \u5df2\u5b8c\u6210\uff1b\u56de\u50b3\u5b57\u4e32\u8868\u793a\u9032\u884c\u4e2d"""
     if profile['onboarding_done']:
         return None
 
     step = profile['onboarding_step']
 
+    # Step 0\uff1a\u7b2c\u4e00\u6b21\u9032\u4f86
     if step == 0:
         line_name = get_line_display_name(line_user_id)
         if line_name:
             save_profile(line_user_id, display_name=line_name, onboarding_step=2)
             return (
-                f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水 🌊\n\n"
-                "在開始之前，想先了解你喜歡什麼樣的教練風格！\n\n"
+                f"\U0001f44b \u5669\uff0c{line_name}\uff01\u6211\u662f\u4f60\u7684 AI \u751f\u6d3b\u6559\u7df4 \u6fb3\u82e5\u6c34 \U0001f30a\n\n"
+                "\u5728\u958b\u59cb\u4e4b\u524d\uff0c\u60f3\u5148\u4e86\u89e3\u4f60\u559c\u6b61\u4ec0\u9ebc\u6a23\u7684\u6559\u7df4\u98a8\u683c\uff01\n\n"
                 + _tone_question()
             )
         else:
             save_profile(line_user_id, onboarding_step=1)
             return (
-                "👋 嗨！我是你的 AI 生活教練 澄若水 🌊\n\n"
-                "在開始之前，我想先多了解你一點！\n\n"
-                "❶ 你怎麼稱呼你自己呢？（輸入你的名字或暱稱就好）"
+                "\U0001f44b \u5022\uff01\u6211\u662f\u4f60\u7684 AI \u751f\u6d3b\u6559\u7df4 \u6fb3\u82e5\u6c34 \U0001f30a\n\n"
+                "\u5728\u958b\u59cb\u4e4b\u524d\uff0c\u6211\u60f3\u5148\u591a\u4e86\u89e3\u4f60\u4e00\u9ede\uff01\n\n"
+                "\u2460 \u4f60\u600e\u9ebc\u7a31\u547c\u4f60\u81ea\u5df1\u5462\uff1f\uff08\u8f38\u5165\u4f60\u7684\u540d\u5b57\u6216\u6232\u7a3c\u5c31\u597d\uff09"
             )
 
+    # Step 1\uff1a\u624b\u52d5\u8f38\u5165\u540d\u5b57\uff08\u62ac\u4e0d\u5230\u6232\u7a3c\u624d\u6703\u5230\u9019\u88e1\uff09
     if step == 1:
         answer = text.strip()
         if not answer:
-            return "名字不能是空的喔！請輸入你的名字或暱稱 😊"
+            return "\u540d\u5b57\u4e0d\u80fd\u662f\u7a7a\u7684\u564a\uff01\u8acb\u8f38\u5165\u4f60\u7684\u540d\u5b57\u6216\u6232\u7a3c \U0001f60a"
         save_profile(line_user_id, display_name=answer, onboarding_step=2)
-        return "很高興認識你！🙌\n\n" + _tone_question()
+        return "\u5f88\u9ad8\u8208\u8a8d\u8b58\u4f60\uff01\U0001f64f\n\n" + _tone_question()
 
+    # Step 2\uff1a\u8a9e\u6c23
     if step == 2:
         opt = TONE_OPTIONS.get(text.strip())
         if not opt:
-            valid = '、'.join(TONE_OPTIONS.keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _tone_question()
+            valid = '\u3001'.join(TONE_OPTIONS.keys())
+            return f"\u8acb\u8f38\u5165 {valid} \u5176\u4e2d\u4e00\u500b\u6578\u5b57 \U0001f60a\n\n" + _tone_question()
         save_profile(line_user_id, coach_tone=opt['value'], onboarding_step=3)
         return _style_question()
 
+    # Step 3\uff1a\u6eab\u901a\u65b9\u5f0f
     if step == 3:
         opt = STYLE_OPTIONS.get(text.strip())
         if not opt:
-            valid = '、'.join(STYLE_OPTIONS.keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _style_question()
+            valid = '\u3001'.join(STYLE_OPTIONS.keys())
+            return f"\u8acb\u8f38\u5165 {valid} \u5176\u4e2d\u4e00\u500b\u6578\u5b57 \U0001f60a\n\n" + _style_question()
         save_profile(line_user_id, coach_style=opt['value'], onboarding_step=4)
         return _quote_question()
 
+    # Step 4\uff1a\u5f15\u7528\u9891\u7387
     if step == 4:
         opt = QUOTE_OPTIONS.get(text.strip())
         if not opt:
-            valid = '、'.join(QUOTE_OPTIONS.keys())
-            return f"請輸入 {valid} 其中一個數字 😊\n\n" + _quote_question()
+            valid = '\u3001'.join(QUOTE_OPTIONS.keys())
+            return f"\u8acb\u8f38\u5165 {valid} \u5176\u4e2d\u4e00\u500b\u6578\u5b57 \U0001f60a\n\n" + _quote_question()
         save_profile(line_user_id, quote_freq=opt['value'], onboarding_done=1, onboarding_step=5)
 
         p = get_profile(line_user_id)
-        name = p['display_name'] or '你'
+        name = p['display_name'] or '\u4f60'
         tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == p['coach_tone']), '')
         style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == p['coach_style']), '')
         quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == p['quote_freq']), '')
 
         return (
-            f"太棒了，{name}！✨ 設定完成！\n\n"
-            f"📋 你的教練風格：\n"
-            f"• 語氣：{tone_label}\n"
-            f"• 溝通方式：{style_label}\n"
-            f"• 引用頻率：{quote_label}\n\n"
-            "從現在開始，我就是你的專屬教練了 💪\n"
-            "有什麼想聊的，直接說吧！\n\n"
-            "（隨時可以輸入 ⚙️ /setting 重新調整教練風格）"
+            f"\u592a\u68d2\u4e86\uff0c{name}\uff01\u2728 \u8a2d\u5b9a\u5b8c\u6210\uff01\n\n"
+            f"\U0001f4cb \u4f60\u7684\u6559\u7df4\u98a8\u683c\uff1a\n"
+            f"\u2022 \u8a9e\u6c23\uff1a{tone_label}\n"
+            f"\u2022 \u6eab\u901a\u65b9\u5f0f\uff1a{style_label}\n"
+            f"\u2022 \u5f15\u7528\u9891\u7387\uff1a{quote_label}\n\n"
+            "\u5f9e\u73fe\u5728\u958b\u59cb\uff0c\u6211\u5c31\u662f\u4f60\u7684\u5c08\u5c6c\u6559\u7df4\u4e86 \U0001f4aa\n"
+            "\u6709\u4ec0\u9ebc\u60f3\u8058\u7684\uff0c\u76f4\u63a5\u8aaa\u5427\uff01\n\n"
+            "\uff08\u96a8\u6642\u53ef\u4ee5\u8f38\u5165 \u2699\ufe0f /setting \u91cd\u65b0\u8abf\u6574\u6559\u7df4\u98a8\u683c\uff09"
         )
 
     return None
 
 # ============================
-# Dify inputs 組裝
+# Dify inputs \u7d44\u88dd
 # ============================
 
 def build_dify_inputs(profile):
     import datetime, zoneinfo
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
     now = datetime.datetime.now(tz)
-    current_time = now.strftime("%Y年%m月%d日 %H:%M（%A）")
+    current_time = now.strftime("%Y\u5e74%m\u6708%d\u65e5 %H:%M\uff08%A\uff09")
 
-    tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
-    style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
-    quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '偶爾適時引用即可')
+    tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '\u5e73\u8861\u7406\u6027')
+    style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '\u5faa\u5faa\u5584\u8a95\u3001\u5f15\u5c0e\u63a2\u7d22')
+    quote_dify = next((v['dify'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '\u5076\u723e\u9069\u6642\u5f15\u7528\u5373\u53ef')
     return {
-        "user_name": profile.get('display_name') or '用戶',
+        "user_name": profile.get('display_name') or '\u7528\u6236',
         "coach_tone": tone_dify,
         "coach_style": style_dify,
         "quote_freq": quote_dify,
@@ -358,7 +381,7 @@ def build_dify_inputs(profile):
     }
 
 # ============================
-# Dify API 呼叫
+# Dify API \u8a2a\u4f55\uff08\u542b\u5099\u63f4\uff09
 # ============================
 
 def call_dify(api_key, user_id, text, conversation_id, inputs):
@@ -389,56 +412,56 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        return answer if answer else "\U0001f914 \u6211\u60f3\u5230\u4e00\u534a\u5fd8\u8a18\u8aaa\u4ec0\u9ebc\u4e86\uff0c\u8acb\u518d\u554f\u6211\u4e00\u6b21\uff01"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-        print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
+        print(f"[Dify Primary] \u9023\u7dda\u554f\u984c: {e} | user={user_id}")
         if DIFY_API_KEY_FALLBACK:
             try:
-                print(f"[Dify Fallback] 啟動備援 | user={user_id}")
+                print(f"[Dify Fallback] \u555f\u52d5\u5099\u63f4 | user={user_id}")
                 result = call_dify(DIFY_API_KEY_FALLBACK, user_id, text, None, inputs)
                 answer = result.get('answer', '').strip()
                 if answer:
-                    return "⚡️ 我暫時切換到備用系統回答你：\n\n" + answer
-                return "😓 備援系統也沒回應，請稍後再試！"
+                    return "\u26a1\ufe0f \u6211\u6682\u6642\u5207\u63db\u5230\u5099\u7528\u7cfb\u7d71\u56de\u7b54\u4f60\uff1a\n\n" + answer
+                return "\U0001f613 \u5099\u63f4\u7cfb\u7d71\u4e5f\u6c92\u56de\u61c9\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66\uff01"
             except Exception as fe:
-                print(f"[Dify Fallback] 失敗: {fe}")
+                print(f"[Dify Fallback] \u5931\u6557: {fe}")
         return (
-            "☕ 我剛剛去泡了杯茶回來，結果忘記你問什麼了...\n\n"
-            "請稍等一下再試試看！如果一直這樣，請聯絡開發者 Chris 看看哦 🙏"
+            "\u2615 \u6211\u5269\u5015\u53bb\u6ce1\u4e86\u676f\u8336\u56de\u4f86\uff0c\u7d50\u679c\u5fd8\u8a18\u4f60\u554f\u4ec0\u9ebc\u4e86...\n\n"
+            "\u8acb\u7a0d\u7b49\u4e00\u4e0b\u518d\u8a66\u8a66\u770b\uff01\u5982\u679c\u4e00\u76f4\u9019\u6a23\uff0c\u8acb\u8054\u7d61\u958b\u767c\u8005 Chris \u770b\u770b\u55b7 \U0001f64f"
         )
 
     except requests.exceptions.HTTPError as e:
-        status = e.response.status_code if e.response is not None else '未知'
+        status = e.response.status_code if e.response is not None else '\u672a\u77e5'
         error_msg = ''
         try:
             error_msg = e.response.json().get('message', '')
         except Exception:
             pass
-        print(f"[Dify] HTTP 錯誤 {status}: {error_msg} | user={user_id}")
+        print(f"[Dify] HTTP \u932f\u8aa4 {status}: {error_msg} | user={user_id}")
         return (
-            f"🔧 我遇到了一點小問題（錯誤碼：{status}）\n\n"
-            "先去找 Chris 修一下，請稍後再試！感謝你的耐心 💪"
+            f"\U0001f527 \u6211\u9047\u5230\u4e86\u4e00\u9ede\u5c0f\u554f\u984c\uff08\u9519\u8aa4\u78bc\uff1a{status}\uff09\n\n"
+            "\u5148\u53bb\u627e Chris \u4fee\u4e00\u4e0b\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66\uff01\u611f\u8b1d\u4f60\u7684\u8010\u5fc3 \U0001f4aa"
         )
 
     except Exception as e:
-        print(f"[Dify] 未預期錯誤: {e} | user={user_id}")
+        print(f"[Dify] \u672a\u9810\u671f\u932f\u8aa4: {e} | user={user_id}")
         return (
-            "😵 我剛才靈魂出竅了一下，請再問我一次！\n\n"
-            "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
+            "\U0001f635 \u6211\u525a\u624d\u9748\u9b42\u51fa\u7ac5\u4e86\u4e00\u4e0b\uff0c\u8acb\u518d\u554f\u6211\u4e00\u6b21\uff01\n\n"
+            "\u5982\u679c\u554f\u984c\u4e00\u76f4\u51fa\u73fe\uff0c\u9ebb\u7159\u8054\u7d61\u958b\u767c\u8005 Chris \u770b\u770b\uff0c\u8b1d\u8b1d\u4f60\u7684\u5305\u5bb9 \U0001f64f"
         )
 
 # ============================
-# 指令處理
+# \u6307\u4ee4\u8655\u7406
 # ============================
 
 HELP_TEXT = (
-    "🤖 指令說明：\n\n"
-    "🔄 /reset    — 清除對話記憶，重新開始\n"
-    "⚙️ /setting  — 重新設定教練風格\n"
-    "📋 /profile  — 查看目前的設定\n"
-    "❓ /help     — 顯示這個說明\n\n"
-    "直接輸入文字就能和我對話！"
+    "\U0001f916 \u6307\u4ee4\u8aaa\u660e\uff1a\n\n"
+    "\U0001f504 /reset    \u2014 \u6e05\u9664\u5c0d\u8a71\u8a18\u61b6\uff0c\u91cd\u65b0\u958b\u59cb\n"
+    "\u2699\ufe0f /setting  \u2014 \u91cd\u65b0\u8a2d\u5b9a\u6559\u7df4\u98a8\u683c\n"
+    "\U0001f4cb /profile  \u2014 \u67e5\u770b\u76ee\u524d\u7684\u8a2d\u5b9a\n"
+    "\u2753 /help     \u2014 \u986f\u793a\u9019\u500b\u8aaa\u660e\n\n"
+    "\u76f4\u63a5\u8f38\u5165\u6587\u5b57\u5c31\u80fd\u548c\u6211\u5c0d\u8a71\uff01"
 )
 
 def handle_command(user_id, text, profile):
@@ -446,27 +469,27 @@ def handle_command(user_id, text, profile):
 
     if cmd == '/reset':
         reset_conversation(user_id)
-        return "🔄 對話記憶已清除！\n\n我們重新開始吧～有什麼想聊的？😊"
+        return "\U0001f504 \u5c0d\u8a71\u8a18\u61b6\u5df2\u6e05\u9664\uff01\n\n\u6211\u5011\u91cd\u65b0\u958b\u59cb\u5427\uff5e\u6709\u4ec0\u9ebc\u60f3\u8058\u7684\uff1f\U0001f60a"
 
     if cmd == '/help':
         return HELP_TEXT
 
     if cmd == '/setting':
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
-        return "⚙️ 好的！我們來重新調整一下～\n\n" + _tone_question()
+        return "\u2699\ufe0f \u597d\u7684\uff01\u6211\u5011\u4f86\u91cd\u65b0\u8abf\u6574\u4e00\u4e0b\uff5e\n\n" + _tone_question()
 
     if cmd == '/profile':
-        name = profile.get('display_name') or '未設定'
-        tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '未設定')
-        style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '未設定')
-        quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '未設定')
+        name = profile.get('display_name') or '\u672a\u8a2d\u5b9a'
+        tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '\u672a\u8a2d\u5b9a')
+        style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '\u672a\u8a2d\u5b9a')
+        quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '\u672a\u8a2d\u5b9a')
         return (
-            f"📋 你的教練設定：\n\n"
-            f"👤 名字：{name}\n"
-            f"🎯 語氣：{tone_label}\n"
-            f"💬 溝通方式：{style_label}\n"
-            f"📚 引用頻率：{quote_label}\n\n"
-            "用 /setting 可以重新調整～"
+            f"\U0001f4cb \u4f60\u7684\u6559\u7df4\u8a2d\u5b9a\uff1a\n\n"
+            f"\U0001f464 \u540d\u5b57\uff1a{name}\n"
+            f"\U0001f3af \u8a9e\u6c23\uff1a{tone_label}\n"
+            f"\U0001f4ac \u6eab\u901a\u65b9\u5f0f\uff1a{style_label}\n"
+            f"\U0001f4da \u5f15\u7528\u9891\u7387\uff1a{quote_label}\n\n"
+            "\u7528 /setting \u53ef\u4ee5\u91cd\u65b0\u8abf\u6574\uff5e"
         )
 
     return None
@@ -491,48 +514,51 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
 
-    # 1. 指令優先
+    # 1. \u6307\u4ee4\u512a\u5148
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=command_response))
         return
 
-    # 2. Onboarding 問卷
+    # 2. Onboarding \u554f\u5377\uff08\u65b0\u7528\u6236\uff09
     onboarding_response = handle_onboarding(user_id, user_text, profile)
     if onboarding_response is not None:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
         return
 
-    # 3. 正常 AI 對話
+    # 3. \u6b63\u5e38 AI \u5c0d\u8a71
     replied_flag = threading.Event()
 
     def process_and_push():
-        # 背景同步用戶到 Base44
-        sync_user_to_base44_async(user_id, profile)
-        
-        # 送 loading animation
+        try:
+            # 1. \u540c\u6b65\u7528\u6236\u8cc7\u6599\u5230 Base44
+            sync_user_to_base44(user_id)
+        except Exception as sync_err:
+            print(f"[sync] \u5931\u6557: {sync_err}")
+
+        # 2. \u9001 loading animation\uff08\u6700\u591a 60 \u79d2\uff09
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
-        
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
-            print(f"[handle_message] 未預期錯誤: {e}")
-            ai_response = "😵 出了點小問題，請再試一次！"
+            print(f"[handle_message] \u672a\u9810\u671f\u932f\u8aa4: {e}")
+            ai_response = "\U0001f635 \u51fa\u4e86\u9ede\u5c0f\u554f\u984c\uff0c\u8acb\u518d\u8a66\u4e00\u6b21\uff01"
+        
+        # 3. \u507d\u6a19\u4e26\u5132\u5b58\u76ee\u6a19/\u4e8b\u4ef6
+        try:
+            detect_and_save_goal_or_event(user_id, user_text, current_profile)
+        except Exception as detect_err:
+            print(f"[detect] \u5931\u6557: {detect_err}")
         
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
-        
-        # 偵測目標/事件關鍵詞並背景儲存
-        entity_type, entity_data = detect_goal_or_event(user_text)
-        if entity_type:
-            save_goal_or_event_async(user_id, profile.get('display_name', ''), entity_type, entity_data)
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
 # ============================
-# 健康檢查
+# \u5065\u5eb7\u6aa2\u67e5
 # ============================
 
 @app.get("/health")
