@@ -268,6 +268,61 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+def detect_and_save_goal_or_event(user_id, display_name, dify_response):
+    """從 Dify 回應中偵測目標/事件 tag，自動呼叫 saveGoalOrEvent"""
+    import re
+    
+    answer = dify_response.strip()
+    
+    # 偵測 [GOAL: title | target_date | type]
+    goal_matches = re.findall(r'\[GOAL:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(short|medium|long)\s*\]', answer)
+    for title, target_date, gtype in goal_matches:
+        try:
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'type': gtype.strip(),
+                    'target_date': target_date.strip(),
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 目標已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44] 目標儲存失敗: {e}")
+    
+    # 偵測 [EVENT: title | type | recurrence]
+    event_matches = re.findall(r'\[EVENT:\s*(.+?)\s*\|\s*(habit|todo|milestone|reminder)\s*\|\s*(none|daily|weekly|monthly)\s*\]', answer)
+    for title, etype, recur in event_matches:
+        try:
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': display_name,
+                    'title': title.strip(),
+                    'type': etype.strip(),
+                    'recurrence': recur.strip(),
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 事件已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44] 事件儲存失敗: {e}")
+    
+    # 移除 tag，返回乾淨的回應
+    clean_answer = re.sub(r'\[GOAL:.+?\]', '', answer)
+    clean_answer = re.sub(r'\[EVENT:.+?\]', '', clean_answer)
+    return clean_answer.strip()
+
+
 def ask_dify(user_id, text, profile):
     # 同步用戶資料到 Base44（背景執行，不阻擋主流程）
     sync_user_to_base44(user_id, profile)
@@ -281,7 +336,11 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        if not answer:
+            return "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        # 自動偵測並儲存目標/事件
+        clean_answer = detect_and_save_goal_or_event(user_id, profile.get('display_name', ''), answer)
+        return clean_answer if clean_answer else answer
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify] 連線問題: {e}")
