@@ -14,6 +14,9 @@ BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.a
 
 app = FastAPI()
 
+# Base44 API 端點
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
 # --- 環境變數 ---
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
@@ -56,6 +59,57 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # --- SQLite 初始化 ---
 DB_PATH = os.environ.get('DB_PATH', '/data/lgat.db')
+
+# ============================
+# Base44 API 同步
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+        }
+        requests.post(f'{BASE44_API_URL}/functions/syncUser', json=payload, timeout=5)
+    except Exception as e:
+        print(f"[syncUser] 錯誤: {e}")
+
+def save_goal_or_event(line_user_id, entity_type, title, **kwargs):
+    """儲存目標或事件到 Base44"""
+    try:
+        profile = get_profile(line_user_id)
+        payload = {
+            "entity_type": entity_type,
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "title": title,
+            **kwargs
+        }
+        requests.post(f'{BASE44_API_URL}/functions/saveGoalOrEvent', json=payload, timeout=5)
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 錯誤: {e}")
+
+def detect_goal_or_event(user_id, text):
+    """簡單關鍵詞偵測，自動儲存目標或事件"""
+    text_lower = text.lower()
+    goal_keywords = ['目標', '想要', '要達到', '計畫', '想完成', '我要', '設定目標']
+    event_keywords = ['待辦', '要做', '習慣', '打卡', '完成', '明天', '今天']
+    
+    goal_score = sum(1 for kw in goal_keywords if kw in text_lower)
+    event_score = sum(1 for kw in event_keywords if kw in text_lower)
+    
+    if goal_score >= 2:
+        save_goal_or_event(user_id, 'goal', text[:30], type='short', description=text)
+    elif event_score >= 2:
+        save_goal_or_event(user_id, 'event', text[:30], type='todo', note=text)
+
+# ============================
+# SQLite 初始化
+# ============================
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
