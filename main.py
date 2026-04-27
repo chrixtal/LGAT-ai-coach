@@ -513,7 +513,157 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
 # ============================
+# Base44 同步函式
+# ============================
+
+def sync_to_base44(line_user_id, display_name, profile, total_messages=None):
+    """將用戶資料同步到 Base44 後台"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base44_api}/functions/syncUser'
+    payload = {
+        'line_user_id': line_user_id,
+        'display_name': display_name,
+        'coach_tone': profile.get('coach_tone'),
+        'coach_style': profile.get('coach_style'),
+        'quote_freq': profile.get('quote_freq'),
+        'plan': profile.get('plan', 'free'),
+    }
+    if total_messages is not None:
+        payload['total_messages'] = total_messages
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] 同步用戶成功: {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, user_text):
+    """偵測用戶文本中的目標或事件關鍵詞，自動儲存到 Base44"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base44_api}/functions/saveGoalOrEvent'
+    
+    # 簡易的關鍵詞偵測（可以改成 NLP）
+    goal_keywords = ['目標', '想要', '計畫', '要達成', '希望', '夢想', '想成為', '想學']
+    event_keywords = ['習慣', '打卡', '待辦', '要做', '完成了', '今天', '里程碑', '達成']
+    
+    lower_text = user_text.lower()
+    
+    # 偵測目標
+    if any(kw in lower_text for kw in goal_keywords):
+        # 簡易提取目標標題（取前 30 字）
+        title = user_text[:50] if user_text else '新目標'
+        payload = {
+            'entity_type': 'goal',
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'title': title,
+            'description': user_text,
+            'type': 'short',  # 預設短期，後續可改
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=5)
+            if resp.ok:
+                print(f"[Base44] 目標已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44] 儲存目標失敗: {e}")
+    
+    # 偵測事件
+    elif any(kw in lower_text for kw in event_keywords):
+        title = user_text[:50] if user_text else '新事件'
+        payload = {
+            'entity_type': 'event',
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'title': title,
+            'type': 'todo',  # 預設待辦
+            'note': user_text,
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=5)
+            if resp.ok:
+                print(f"[Base44] 事件已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44] 儲存事件失敗: {e}")
+
+# ============================
+# ============================
+# Base44 同步函式
+# ============================
+
+def sync_to_base44(line_user_id, display_name, profile, total_messages=None):
+    """將用戶資料同步到 Base44 後台"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base44_api}/functions/syncUser'
+    payload = {
+        'line_user_id': line_user_id,
+        'display_name': display_name,
+        'coach_tone': profile.get('coach_tone'),
+        'coach_style': profile.get('coach_style'),
+        'quote_freq': profile.get('quote_freq'),
+        'plan': profile.get('plan', 'free'),
+    }
+    if total_messages is not None:
+        payload['total_messages'] = total_messages
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] 同步用戶成功: {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, user_text):
+    """偵測用戶文本中的目標或事件關鍵詞，自動儲存到 Base44"""
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base44_api}/functions/saveGoalOrEvent'
+    
+    goal_keywords = ['目標', '想要', '計畫', '要達成', '希望', '夢想', '想成為', '想學']
+    event_keywords = ['習慣', '打卡', '待辦', '要做', '完成了', '今天', '里程碑', '達成']
+    
+    lower_text = user_text.lower()
+    
+    if any(kw in lower_text for kw in goal_keywords):
+        title = user_text[:50] if user_text else '新目標'
+        payload = {
+            'entity_type': 'goal',
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'title': title,
+            'description': user_text,
+            'type': 'short',
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=5)
+            if resp.ok:
+                print(f"[Base44] 目標已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44] 儲存目標失敗: {e}")
+    
+    elif any(kw in lower_text for kw in event_keywords):
+        title = user_text[:50] if user_text else '新事件'
+        payload = {
+            'entity_type': 'event',
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'title': title,
+            'type': 'todo',
+            'note': user_text,
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=5)
+            if resp.ok:
+                print(f"[Base44] 事件已儲存: {title}")
+        except Exception as e:
+            print(f"[Base44] 儲存事件失敗: {e}")
+
+
 # LINE Webhook & 主控邏輯
 # ============================
 
@@ -579,8 +729,14 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
-        send_loading_animation(user_id, seconds=60)
+        # 先同步用戶資料到 Base44
         current_profile = get_profile(user_id)
+        sync_to_base44(user_id, current_profile.get("display_name", ""), current_profile)
+        
+        send_loading_animation(user_id, seconds=60)
+
+        # 偵測並儲存目標/事件
+        detect_and_save_goal_or_event(user_id, current_profile.get("display_name", ""), user_text)
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
