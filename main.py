@@ -23,9 +23,12 @@ def call_base44_function(func_name, payload):
     """呼叫 Base44 backend function"""
     try:
         url = f'{BASE44_API_BASE}/{func_name}'
+        print(f"[Base44] POST {url}")
         resp = requests.post(url, json=payload, timeout=10)
         resp.raise_for_status()
-        return resp.json()
+        result = resp.json()
+        print(f"[Base44] {func_name} 成功: {result}")
+        return result
     except Exception as e:
         print(f"[Base44] {func_name} 失敗: {e}")
         return None
@@ -37,8 +40,7 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
-BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app.base44.com')
-BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+BASE44_API_BASE = os.environ.get('BASE44_API_BASE', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
 # 教練設定
