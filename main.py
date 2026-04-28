@@ -717,6 +717,85 @@ def detect_and_save_goal_event(line_user_id, display_name, text):
         print(f"[Base44] 偵測/儲存失敗: {e}")
 
 # ============================
+
+# ============================
+# 自動偵測與 Backend API 呼叫
+# ============================
+
+BACKEND_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def detect_goal_keywords(text):
+    """偵測短中長期目標的關鍵詞"""
+    goal_keywords = {
+        'short': ['希望', '想要', '打算', '這週', '本月', '近期', '想'],
+        'medium': ['三個月', '半年', '中期', '年初', '下半年'],
+        'long': ['一年', '明年', '長期', '五年', '十年']
+    }
+    for goal_type, keywords in goal_keywords.items():
+        for kw in keywords:
+            if kw in text:
+                return goal_type
+    return None
+
+def detect_event_keywords(text):
+    """偵測事件類型（習慣、待辦、里程碑）"""
+    event_keywords = {
+        'habit': ['習慣', '每天', '每週', '打卡', '堅持', '養成'],
+        'todo': ['要做', '需要', '今天', '明天', '任務', '完成'],
+        'milestone': ['達成', '通過', '拿到', '升職', '考上']
+    }
+    for event_type, keywords in event_keywords.items():
+        for kw in keywords:
+            if kw in text:
+                return event_type
+    return None
+
+def extract_title_from_text(text, max_len=20):
+    """從文本提取標題（前 20 個字）"""
+    return text[:max_len].strip()
+
+def sync_user_to_backend(line_user_id, display_name, profile):
+    """呼叫 syncUser backend function"""
+    try:
+        url = f'{BACKEND_URL}/functions/syncUser'
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': display_name or '',
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+            'plan': profile.get('plan', 'free'),
+        }
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.ok:
+            print(f'[syncUser] OK for {line_user_id}')
+        else:
+            print(f'[syncUser] FAIL: {resp.status_code} {resp.text}')
+    except Exception as e:
+        print(f'[syncUser] ERROR: {e}')
+
+def save_goal_or_event(line_user_id, display_name, entity_type, title, **kwargs):
+    """呼叫 saveGoalOrEvent backend function"""
+    try:
+        url = f'{BACKEND_URL}/functions/saveGoalOrEvent'
+        payload = {
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': display_name or '',
+            'title': title,
+            **kwargs
+        }
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.ok:
+            print(f'[saveGoalOrEvent] OK: {entity_type} "{title}"')
+        else:
+            print(f'[saveGoalOrEvent] FAIL: {resp.status_code} {resp.text}')
+    except Exception as e:
+        print(f'[saveGoalOrEvent] ERROR: {e}')
+
 def ask_dify(user_id, text, profile):
     # 同步用戶資料到 Base44
     sync_user_to_base44(user_id, profile)
