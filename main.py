@@ -339,6 +339,91 @@ def build_dify_inputs(profile):
         "quote_freq": quote_dify,
     }
 
+
+# ============================
+# Base44 API 呼叫
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """將用戶資料同步到 Base44 資料庫"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', ''),
+            "coach_style": profile.get('coach_style', ''),
+            "quote_freq": profile.get('quote_freq', ''),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json=payload,
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser 成功 | user={user_id}")
+            return resp.json()
+        else:
+            print(f"[Base44] syncUser 失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] syncUser 例外: {e}")
+    return None
+
+def detect_goal_or_event(text, user_id, profile):
+    """從用戶訊息中偵測目標或事件，自動儲存"""
+    try:
+        # 簡單的關鍵詞偵測
+        goal_keywords = ['我想', '我的目標', '我要', '我計畫', '目標', '夢想']
+        event_keywords = ['待辦', '任務', '習慣', '提醒我', '里程碑', '完成', '做']
+        
+        detected_type = None
+        detected_title = text[:30]  # 預設用前30字
+        
+        # 目標偵測
+        if any(kw in text for kw in goal_keywords):
+            # 嘗試從訊息中提取關鍵詞
+            if '我想' in text or '目標是' in text or '想要' in text:
+                detected_type = 'goal'
+                # 簡單提取：「我想...」後面的部分
+                # 簡單提取：「我想...」後面的部分
+                if '我想' in text:
+                    parts = text.split('我想')
+                    if len(parts) > 1:
+                        extracted = parts[1].replace('。','|').replace('，','|').split('|')[0].strip()
+                        detected_title = extracted[:50]
+                    detected_title = match.group(1).strip()[:50]
+        
+        # 事件偵測
+        if any(kw in text for kw in event_keywords):
+            if '習慣' in text or '每天' in text or '每週' in text:
+                detected_type = 'event'
+                detected_title = text[:30]
+        
+        if detected_type:
+            payload = {
+                "entity_type": detected_type,
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "title": detected_title,
+                "description": text[:100],  # 完整訊息當描述
+                "type": "short" if detected_type == 'goal' else "todo",
+            }
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=10
+            )
+            if resp.status_code == 200:
+                print(f"[Base44] saveGoalOrEvent 成功 | type={detected_type}, user={user_id}")
+                return True
+        
+    except Exception as e:
+        print(f"[Base44] 偵測 exception: {e}")
+    
+    return False
+
 def call_dify(api_key, user_id, text, conversation_id, inputs):
     url = f'{DIFY_API_URL}/chat-messages'
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
@@ -532,20 +617,18 @@ def handle_message(event):
     def process_and_push():
         # 同步用戶資料到 Base44
         current_profile = get_profile(user_id)
-        current_profile['total_messages'] = (current_profile.get('total_messages', 0) + 1)
-        save_profile(user_id, **{k: v for k, v in current_profile.items() if k != 'line_user_id'})
         sync_user_to_base44(user_id, current_profile)
-
-        # 發 loading animation
+        
+        # 偵測並自動儲存目標/事件
+        detect_goal_or_event(user_text, user_id, current_profile)
+        
+        # 先送 loading animation（最多 60 秒）
         send_loading_animation(user_id, seconds=60)
-
-        # 呼叫 Dify
         try:
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
-            print(f"[handle_message] 例外: {e}")
+            print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
-
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
