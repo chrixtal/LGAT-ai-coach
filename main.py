@@ -368,50 +368,75 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
 # 目標/事件偵測與儲存
 # ============================
 
-def detect_and_save_goal_or_event(user_id, text, profile):
-    """偵測用戶是否提到目標或事件，自動儲存到 Base44"""
+# ============================
+
+BASE44_API_URL = "https://app-dd7dd6e1.base44.app/functions"
+BASE44_USER_TOKEN = os.environ.get('BASE44_USER_TOKEN', '')  # 可選，若需要認證
+
+def sync_user_to_base44(line_user_id, display_name, profile, total_messages=0):
+    """同步用戶資料到 Base44"""
     try:
-        api_url = "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent"
+        data = {
+            'line_user_id': line_user_id,
+            'display_name': display_name or '',
+            'coach_tone': profile.get('coach_tone'),
+            'coach_style': profile.get('coach_style'),
+            'quote_freq': profile.get('quote_freq'),
+            'total_messages': total_messages,
+        }
+        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶 {line_user_id} 已同步")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 同步失敗: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text, dify_response):
+    """從對話中偵測目標或事件關鍵詞，自動儲存"""
+    try:
+        combined = f"{text}\n{dify_response}".lower()
         
-        # 關鍵詞：如果包含這些詞，判斷為目標或事件
-        goal_keywords = ['目標', '想要', '計畫', '要達成', '希望', '夢想', '目的', 'goal', '想學', '想成為']
-        event_keywords = ['完成', '做', '打卡', '習慣', '事件', '待辦', 'todo', '提醒', '紀錄']
-        milestone_keywords = ['里程碑', '第一次', '首次', '達到', 'milestone']
+        # 目標關鍵詞
+        goal_keywords = ['目標', '想要', '計畫', '希望', '達成', '完成', '要', '做到']
+        is_goal = any(kw in combined for kw in goal_keywords)
         
-        text_lower = text.lower()
+        # 事件關鍵詞
+        event_keywords = ['習慣', '每天', '待辦', '里程碑', '做', '完成', '打卡', '完成']
+        is_event = any(kw in combined for kw in event_keywords)
         
-        # 簡單的關鍵詞偵測
-        entity_type = None
-        if any(kw in text_lower for kw in goal_keywords):
-            entity_type = 'goal'
-        elif any(kw in text_lower for kw in milestone_keywords):
-            entity_type = 'event'
-        elif any(kw in text_lower for kw in event_keywords):
-            entity_type = 'event'
-        
-        if not entity_type:
+        if not is_goal and not is_event:
             return
         
-        # 從 text 簡單抽取標題（前 20 字或到句號為止）
-        title = text[:30].split('。')[0].split('，')[0].strip()
-        if len(title) < 3:
-            return
+        # 簡單的標題提取（取前 20 字）
+        title = text[:20].strip() or '未命名'
         
-        payload = {
+        entity_type = 'goal' if is_goal else 'event'
+        event_sub_type = 'todo'
+        if '習慣' in combined:
+            event_sub_type = 'habit'
+        elif '里程碑' in combined:
+            event_sub_type = 'milestone'
+        
+        data = {
             'entity_type': entity_type,
-            'line_user_id': user_id,
-            'display_name': profile.get('display_name', ''),
+            'line_user_id': line_user_id,
+            'display_name': display_name,
             'title': title,
-            'type': 'short' if entity_type == 'goal' else 'todo',
         }
         
-        resp = requests.post(api_url, json=payload, timeout=5)
-        if resp.ok:
-            print(f"[detect] 已儲存 {entity_type}: {title}")
+        if entity_type == 'goal':
+            data['type'] = 'short'  # 預設短期
         else:
-            print(f"[detect] 儲存失敗: {resp.text}")
+            data['type'] = event_sub_type
+        
+        resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 已儲存 {entity_type}: {title}")
+        else:
+            print(f"[Base44] saveGoalOrEvent 失敗: {resp.status_code}")
     except Exception as e:
-        print(f"[detect_and_save_goal_or_event] {e}")
+        print(f"[Base44] 偵測失敗: {e}")
 
 
 def ask_dify(user_id, text, profile):
