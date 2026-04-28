@@ -353,6 +353,31 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+def sync_user_to_base44(user_id: str, profile: dict):
+    """同步用戶資料到 Base44 LgatUser"""
+    import os
+    base44_api = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+    try:
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0),
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(f'{base44_api}/syncUser', json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44 Sync] 用戶 {user_id} 已同步")
+        else:
+            print(f"[Base44 Sync] 同步失敗: {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
