@@ -451,6 +451,34 @@ def detect_and_save_goal_or_event(line_user_id, display_name, text):
                     )
             break
 
+# ============================
+# Base44 同步
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44，每次對話都呼叫"""
+    try:
+        base44_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
+        resp = requests.post(
+            base44_url,
+            json={
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name') or '',
+                'coach_tone': profile.get('coach_tone') or 'balanced',
+                'coach_style': profile.get('coach_style') or 'exploratory',
+                'quote_freq': profile.get('quote_freq') or 'sometimes',
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+                'plan': profile.get('plan', 'free'),
+            },
+            timeout=5
+        )
+        if not resp.ok:
+            print(f"[Base44 Sync] 失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
