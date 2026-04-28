@@ -10,8 +10,95 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 import json
+import re
+import json
 import datetime
 import zoneinfo
+
+# ============================
+# Base44 API 串接（資料同步）
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_BASE_URL = 'https://app-ffa38ee7.base44.app/functions'
+message_counts = {}  # {line_user_id: count}
+
+def call_base44_api(function_name, data):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_BASE_URL}/{function_name}'
+        resp = requests.post(url, json=data, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Base44] {function_name} 失敗: {resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[Base44] 呼叫 {function_name}: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, profile, total_messages=0):
+    """同步用戶資料到 Base44"""
+    data = {
+        "line_user_id": line_user_id,
+        "display_name": profile.get('display_name') or '',
+        "coach_tone": profile.get('coach_tone') or 'balanced',
+        "coach_style": profile.get('coach_style') or 'exploratory',
+        "quote_freq": profile.get('quote_freq') or 'sometimes',
+        "total_messages": total_messages,
+        "reminder_enabled": profile.get('reminder_enabled', False),
+        "reminder_time": profile.get('reminder_time', '08:00'),
+    }
+    return call_base44_api('syncUser', data)
+
+def save_goal_or_event(line_user_id, display_name, entity_type, fields):
+    """儲存目標或事件到 Base44"""
+    data = {
+        "entity_type": entity_type,
+        "line_user_id": line_user_id,
+        "display_name": display_name,
+        **fields
+    }
+    return call_base44_api('saveGoalOrEvent', data)
+
+def detect_goal_or_event(text):
+    """偵測對話中的目標/事件關鍵詞，回傳 (type, fields) 或 (None, None)"""
+    text_lower = text.lower()
+    
+    # 目標關鍵詞
+    if any(kw in text_lower for kw in ['目標', '我要', '我想', '計畫', '希望']):
+        match = re.search(r'(?:目標|想|計畫|打算|希望)(?:是)?[：\s]*(.{2,30})', text)
+        if match:
+            return ('goal', {'title': match.group(1).strip(), 'type': 'short'})
+        return ('goal', {'title': text[:20], 'type': 'short'})
+    
+    # 事件關鍵詞 - 習慣
+    if any(kw in text_lower for kw in ['習慣', '每天', '每週', '養成', '打卡']):
+        return ('event', {'type': 'habit', 'title': f'新習慣', 'recurrence': 'daily'})
+    
+    # 事件關鍵詞 - 待辦
+    if any(kw in text_lower for kw in ['待辦', '要做', '得做', '完成', '達成']):
+        match = re.search(r'(?:要|得|完成)(.{2,20})', text)
+        if match:
+            return ('event', {'type': 'todo', 'title': match.group(1).strip()})
+        return ('event', {'type': 'todo', 'title': text[:20]})
+    
+    # 進度更新
+    if any(kw in text_lower for kw in ['進度', '已經', '做到', '完成了', '成功']):
+        return ('goal_progress', {'progress_note': text[:50]})
+    
+    return (None, None)
+
+def increment_and_sync_messages(line_user_id, profile):
+    """計數訊息並定期同步"""
+    if line_user_id not in message_counts:
+        message_counts[line_user_id] = 0
+    message_counts[line_user_id] += 1
+    
+    # 每 10 條訊息同步一次
+    if message_counts[line_user_id] % 10 == 0:
+        sync_user_to_base44(line_user_id, profile, message_counts[line_user_id])
+
 
 app = FastAPI()
 
@@ -306,7 +393,7 @@ def handle_onboarding(line_user_id, text, profile):
 # ============================
 
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
-BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app.base44.com/api')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 def sync_user_to_base44(line_user_id, profile):
     """同步用戶資料到 Base44 的 LgatUser entity"""
