@@ -79,6 +79,12 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
+# Base44 Backend Functions
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '')
+BASE44_API_BASE = f"https://app-ffa38ee7.base44.app" if BASE44_APP_ID else ""
+SYNC_USER_URL = f"{BASE44_API_BASE}/functions/syncUser" if BASE44_API_BASE else ""
+SAVE_GOAL_OR_EVENT_URL = f"{BASE44_API_BASE}/functions/saveGoalOrEvent" if BASE44_API_BASE else ""
+
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 BASE44_API_BASE = 'https://app-ffa38ee7.base44.app/functions'
 
@@ -773,6 +779,44 @@ def detect_and_save_goal_or_event(user_id, display_name, text):
             requests.post(f'{BASE44_DOMAIN}/functions/saveGoalOrEvent', json=payload, timeout=5)
     except Exception as e:
         print(f"[Base44] detect_and_save error: {e}")
+
+
+
+# ============================
+# Base44 同步函數
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44，非同步執行"""
+    if not SYNC_USER_URL:
+        return
+    try:
+        data = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+        }
+        requests.post(SYNC_USER_URL, json=data, timeout=5)
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+def save_goal_or_event_to_base44(user_id, display_name, entity_type, **fields):
+    """儲存目標/事件到 Base44"""
+    if not SAVE_GOAL_OR_EVENT_URL:
+        return
+    try:
+        data = {
+            "entity_type": entity_type,
+            "line_user_id": user_id,
+            "display_name": display_name,
+            **fields
+        }
+        requests.post(SAVE_GOAL_OR_EVENT_URL, json=data, timeout=5)
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 失敗: {e}")
 
 
 def ask_dify(user_id, text, profile):
