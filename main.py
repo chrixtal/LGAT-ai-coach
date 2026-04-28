@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+from datetime import datetime
 
 # ============================
 # 目標/事件關鍵詞偵測
@@ -590,6 +591,103 @@ def detect_and_save_goal_or_event(user_id, text, profile):
     
     except Exception as e:
         print(f"[Base44 detect_and_save] 失敗: {e}")
+
+
+# ============================
+# Base44 同步
+# ============================
+
+BASE44_DOMAIN = os.environ.get('BASE44_DOMAIN', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(user_id, display_name, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": display_name or "",
+            "coach_tone": profile.get('coach_tone'),
+            "coach_style": profile.get('coach_style'),
+            "quote_freq": profile.get('quote_freq'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(f'{BASE44_DOMAIN}/functions/syncUser', json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] syncUser OK | user={user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, text):
+    """偵測對話中的目標/事件關鍵詞，自動存入 Base44"""
+    try:
+        # 關鍵詞定義
+        short_goal_keywords = ['希望', '想要', '打算', '這週', '本月', '近期']
+        medium_goal_keywords = ['三個月', '半年', '中期']
+        long_goal_keywords = ['一年', '明年', '長期', '五年', '終身']
+        habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持']
+        todo_keywords = ['要做', '需要', '今天', '明天', '任務', '待辦']
+        milestone_keywords = ['達成', '完成', '通過', '拿到', '升職']
+        progress_keywords = ['做了', '進度', '進展', '怎麼樣']
+
+        # 檢查是否包含目標/事件相關內容
+        if any(kw in text for kw in progress_keywords):
+            # 目標進度更新
+            payload = {
+                "entity_type": "goal_progress",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "progress_note": text[:100],
+            }
+            requests.post(f'{BASE44_DOMAIN}/functions/saveGoalOrEvent', json=payload, timeout=5)
+            return
+
+        goal_type = None
+        if any(kw in text for kw in short_goal_keywords):
+            goal_type = 'short'
+        elif any(kw in text for kw in medium_goal_keywords):
+            goal_type = 'medium'
+        elif any(kw in text for kw in long_goal_keywords):
+            goal_type = 'long'
+
+        if goal_type:
+            # 提取目標標題（簡單的方法：取前 30 字）
+            title = text[:30].strip()
+            payload = {
+                "entity_type": "goal",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": title,
+                "description": text,
+                "type": goal_type,
+            }
+            requests.post(f'{BASE44_DOMAIN}/functions/saveGoalOrEvent', json=payload, timeout=5)
+            return
+
+        event_type = None
+        if any(kw in text for kw in habit_keywords):
+            event_type = 'habit'
+        elif any(kw in text for kw in todo_keywords):
+            event_type = 'todo'
+        elif any(kw in text for kw in milestone_keywords):
+            event_type = 'milestone'
+
+        if event_type:
+            title = text[:30].strip()
+            payload = {
+                "entity_type": "event",
+                "line_user_id": user_id,
+                "display_name": display_name,
+                "title": title,
+                "type": event_type,
+                "note": text,
+            }
+            requests.post(f'{BASE44_DOMAIN}/functions/saveGoalOrEvent', json=payload, timeout=5)
+    except Exception as e:
+        print(f"[Base44] detect_and_save error: {e}")
+
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
