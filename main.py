@@ -483,7 +483,59 @@ def sync_user_to_base44(user_id, profile):
     except Exception as e:
         print(f"[Base44 Sync] 錯誤: {e}")
 
+def detect_and_save_goals_events(user_id, user_text, dify_response, profile):
+    """從用戶輸入和 AI 回應中偵測並儲存目標/事件"""
+    BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    
+    # 關鍵詞定義
+    goal_keywords = ['目標', '想要', '計畫', '希望', '夢想', '要達成', '完成']
+    event_keywords = ['習慣', '待辦', '今天', '每天', '完成了', '做到', '任務']
+    
+    text_combined = (user_text + dify_response).lower()
+    
+    # 簡單的目標偵測
+    if any(kw in text_combined for kw in goal_keywords) and len(user_text) > 10:
+        try:
+            requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': user_text[:50],
+                    'description': user_text,
+                    'type': 'short',
+                },
+                timeout=5
+            )
+            print(f"[Base44] 儲存目標: {user_text[:30]}")
+        except Exception as e:
+            print(f"[Base44] saveGoalOrEvent 失敗: {e}")
+    
+    # 事件偵測
+    if any(kw in text_combined for kw in event_keywords) and len(user_text) > 5:
+        try:
+            requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json={
+                    'entity_type': 'event',
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': user_text[:50],
+                    'type': 'todo',
+                    'recurrence': 'daily' if '每天' in user_text else 'none',
+                },
+                timeout=5
+            )
+            print(f"[Base44] 儲存事件: {user_text[:30]}")
+        except Exception as e:
+            print(f"[Base44] saveGoalOrEvent 失敗: {e}")
+
+
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44
+    sync_user_to_base44(user_id, profile)
+    
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
