@@ -364,6 +364,56 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# 目標/事件偵測與儲存
+# ============================
+
+def detect_and_save_goal_or_event(user_id, text, profile):
+    """偵測用戶是否提到目標或事件，自動儲存到 Base44"""
+    try:
+        api_url = "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent"
+        
+        # 關鍵詞：如果包含這些詞，判斷為目標或事件
+        goal_keywords = ['目標', '想要', '計畫', '要達成', '希望', '夢想', '目的', 'goal', '想學', '想成為']
+        event_keywords = ['完成', '做', '打卡', '習慣', '事件', '待辦', 'todo', '提醒', '紀錄']
+        milestone_keywords = ['里程碑', '第一次', '首次', '達到', 'milestone']
+        
+        text_lower = text.lower()
+        
+        # 簡單的關鍵詞偵測
+        entity_type = None
+        if any(kw in text_lower for kw in goal_keywords):
+            entity_type = 'goal'
+        elif any(kw in text_lower for kw in milestone_keywords):
+            entity_type = 'event'
+        elif any(kw in text_lower for kw in event_keywords):
+            entity_type = 'event'
+        
+        if not entity_type:
+            return
+        
+        # 從 text 簡單抽取標題（前 20 字或到句號為止）
+        title = text[:30].split('。')[0].split('，')[0].strip()
+        if len(title) < 3:
+            return
+        
+        payload = {
+            'entity_type': entity_type,
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'title': title,
+            'type': 'short' if entity_type == 'goal' else 'todo',
+        }
+        
+        resp = requests.post(api_url, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[detect] 已儲存 {entity_type}: {title}")
+        else:
+            print(f"[detect] 儲存失敗: {resp.text}")
+    except Exception as e:
+        print(f"[detect_and_save_goal_or_event] {e}")
+
+
 def ask_dify(user_id, text, profile):
     # 先同步用戶資料到 Base44（背景執行）
     threading.Thread(target=sync_user_to_base44, args=(user_id, profile), daemon=True).start()
@@ -497,6 +547,28 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
+        # 同步用戶資料到 Base44
+        try:
+            current_profile = get_profile(user_id)
+            sync_payload = {
+                'line_user_id': user_id,
+                'display_name': current_profile.get('display_name', ''),
+                'coach_tone': current_profile.get('coach_tone', ''),
+                'coach_style': current_profile.get('coach_style', ''),
+                'quote_freq': current_profile.get('quote_freq', ''),
+                'total_messages': (current_profile.get('total_messages', 0) or 0) + 1,
+            }
+            requests.post("https://app-ffa38ee7.base44.app/functions/syncUser", json=sync_payload, timeout=5)
+        except Exception as e:
+            print(f"[syncUser] {e}")
+
+        # 偵測並儲存目標/事件
+        try:
+            current_profile = get_profile(user_id)
+            detect_and_save_goal_or_event(user_id, user_text, current_profile)
+        except Exception as e:
+            print(f"[detect] {e}")
+
         # 先送 loading animation（最多 60 秒）
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
