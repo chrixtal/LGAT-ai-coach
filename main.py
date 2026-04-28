@@ -404,6 +404,32 @@ def detect_and_save_goal_or_event(line_user_id, display_name, user_text):
     except Exception as e:
         print(f"[Base44] 儲存目標異常: {e}")
 
+def sync_user_to_base44(line_user_id, profile):
+    """呼叫 Base44 syncUser API，同步用戶資料"""
+    try:
+        BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=10
+        )
+        if resp.ok:
+            print(f"[syncUser] 成功 | user={line_user_id}")
+        else:
+            print(f"[syncUser] 失敗 {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        print(f"[syncUser] 異常: {e}")
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
