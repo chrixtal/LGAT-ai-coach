@@ -163,19 +163,6 @@ def call_base44_api(function_name, payload):
         print(f"[Base44] {function_name} 失敗: {e}")
         return None
 
-def sync_user_to_base44(user_id, profile):
-    """每次對話時同步用戶到 Base44"""
-    if not BASE44_APP_ID:
-        return
-    payload = {
-        'line_user_id': user_id,
-        'display_name': profile.get('display_name') or '',
-        'coach_tone': profile.get('coach_tone'),
-        'coach_style': profile.get('coach_style'),
-        'quote_freq': profile.get('quote_freq'),
-    }
-    call_base44_api('syncUser', payload)
-
 def detect_and_save_goal_or_event(user_id, display_name, user_text):
     """自動偵測用戶輸入中的目標/事件，並儲存到 Base44"""
     if not BASE44_APP_ID:
@@ -346,6 +333,73 @@ def build_dify_inputs(profile):
         "quote_freq": quote_dify,
         "current_time": current_time,
     }
+
+
+# ============================
+# Base44 Backend API 呼叫
+# ============================
+
+BASE44_API_BASE = os.environ.get('BASE44_API_BASE', 'https://app-ffa38ee7.base44.app/functions')
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        requests.post(
+            f'{BASE44_API_BASE}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': profile.get('total_messages', 0),
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, user_text):
+    """偵測用戶是否在設定目標/事件，自動儲存"""
+    keywords_goal = ['目標', '我想', '計畫', '希望', '想要', '夢想', '目的', '預計', '打算']
+    keywords_event = ['完成', '做了', '達成', '習慣', '提醒', '待辦', '記下', '追蹤']
+    
+    text_lower = text.lower()
+    detected = False
+    
+    # 簡單的關鍵字偵測（可以後續用 LLM 優化）
+    if any(kw in text for kw in keywords_goal):
+        detected = 'goal'
+    elif any(kw in text for kw in keywords_event):
+        detected = 'event'
+    
+    if not detected:
+        return
+    
+    try:
+        payload = {
+            'entity_type': detected,
+            'line_user_id': line_user_id,
+            'display_name': None or profile.get('display_name', ''),
+            'title': text[:30],  # 用前 30 字當標題
+            'description': text,
+        }
+        if detected == 'goal':
+            payload['type'] = 'short'  # 預設短期目標
+        elif detected == 'event':
+            payload['type'] = 'todo'   # 預設待辦
+        
+        requests.post(
+            f'{BASE44_API_BASE}/saveGoalOrEvent',
+            json=payload,
+            timeout=5
+        )
+        print(f"[saveGoalOrEvent] 儲存 {detected} 成功: {text[:30]}")
+    except Exception as e:
+        print(f"[saveGoalOrEvent] 失敗: {e}")
+
 
 # ============================
 # Dify API 呼叫
