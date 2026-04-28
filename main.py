@@ -17,8 +17,12 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+DIFY_SATIR_API_KEY = os.environ.get('DIFY_SATIR_API_KEY', '')   # 薩提爾模式 Dify App
+DIFY_SATIR_API_URL = os.environ.get('DIFY_SATIR_API_URL', DIFY_API_URL)
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://api.base44.com')
+BASE44_API_BASE = os.environ.get('BASE44_API_BASE', 'https://app-ffa38ee7.base44.app/functions')
+DEVELOPER_CONTACT = os.environ.get('DEVELOPER_CONTACT', 'https://line.me/ti/p/your_id')  # 設定開發者聯絡方式
 
 # ============================
 # 教練設定
@@ -63,6 +67,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS user_conversations (
             line_user_id TEXT PRIMARY KEY,
             conversation_id TEXT,
+            satir_conversation_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -74,12 +79,28 @@ def init_db():
             coach_tone TEXT DEFAULT 'balanced',
             coach_style TEXT DEFAULT 'exploratory',
             quote_freq TEXT DEFAULT 'sometimes',
+            mode TEXT DEFAULT 'coach',
+            terms_accepted INTEGER DEFAULT 0,
             onboarding_done INTEGER DEFAULT 0,
             onboarding_step INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # 補欄位（若舊資料庫缺少）
+    for col, default in [
+        ('mode', "'coach'"),
+        ('terms_accepted', '0'),
+        ('satir_conversation_id', "''"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE user_profiles ADD COLUMN {col} TEXT DEFAULT {default}")
+        except Exception:
+            pass
+    try:
+        c.execute("ALTER TABLE user_conversations ADD COLUMN satir_conversation_id TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -89,31 +110,38 @@ init_db()
 # DB helpers
 # ============================
 
-def get_conversation_id(line_user_id):
+def get_conversation_id(line_user_id, mode='coach'):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('SELECT conversation_id FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
+    col = 'satir_conversation_id' if mode == 'satir' else 'conversation_id'
+    c.execute(f'SELECT {col} FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
 
-def save_conversation_id(line_user_id, conversation_id):
+def save_conversation_id(line_user_id, conversation_id, mode='coach'):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
-        INSERT INTO user_conversations (line_user_id, conversation_id, updated_at)
+    col = 'satir_conversation_id' if mode == 'satir' else 'conversation_id'
+    c.execute(f'''
+        INSERT INTO user_conversations (line_user_id, {col}, updated_at)
         VALUES (?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(line_user_id) DO UPDATE SET
-            conversation_id = excluded.conversation_id,
+            {col} = excluded.{col},
             updated_at = CURRENT_TIMESTAMP
     ''', (line_user_id, conversation_id))
     conn.commit()
     conn.close()
 
-def reset_conversation(line_user_id):
+def reset_conversation(line_user_id, mode=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('DELETE FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
+    if mode == 'satir':
+        c.execute('UPDATE user_conversations SET satir_conversation_id = NULL WHERE line_user_id = ?', (line_user_id,))
+    elif mode == 'coach':
+        c.execute('UPDATE user_conversations SET conversation_id = NULL WHERE line_user_id = ?', (line_user_id,))
+    else:
+        c.execute('DELETE FROM user_conversations WHERE line_user_id = ?', (line_user_id,))
     conn.commit()
     conn.close()
 
@@ -132,6 +160,8 @@ def get_profile(line_user_id):
         'coach_tone': 'balanced',
         'coach_style': 'exploratory',
         'quote_freq': 'sometimes',
+        'mode': 'coach',
+        'terms_accepted': 0,
         'onboarding_done': 0,
         'onboarding_step': 0,
     }
@@ -149,22 +179,10 @@ def save_profile(line_user_id, **kwargs):
     conn.close()
 
 # ============================
-# Base44 API 整合
+# LINE API helpers
 # ============================
 
-def call_base44_api(function_name, payload):
-    """呼叫 Base44 backend function"""
-    try:
-        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/{function_name}'
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print(f"[Base44] {function_name} 失敗: {e}")
-        return None
-
 def get_line_display_name(user_id):
-    """從 LINE API 抓用戶暱稱"""
     try:
         profile = line_bot_api.get_profile(user_id)
         return profile.display_name or ''
@@ -173,7 +191,6 @@ def get_line_display_name(user_id):
         return ''
 
 def send_loading_animation(user_id, seconds=20):
-    """呼叫 LINE loading animation API"""
     try:
         resp = requests.post(
             'https://api.line.me/v2/bot/chat/loading/start',
@@ -187,6 +204,32 @@ def send_loading_animation(user_id, seconds=20):
         print(f"[LINE Loading] status={resp.status_code}")
     except Exception as e:
         print(f"[LINE Loading] 失敗: {e}")
+
+# ============================
+# 免責聲明
+# ============================
+
+TERMS_TEXT = (
+    "📋 使用前請閱讀說明\n\n"
+    "澄若水 是一款 AI 深度覺知輔助工具，提供：\n"
+    "• 日常目標追蹤與反思引導\n"
+    "• 薩提爾冰山探索（情緒覺察練習）\n"
+    "• 個人化教練風格對話\n\n"
+    "⚠️ 免責聲明：\n"
+    "本工具不提供醫療、心理治療或法律建議。"
+    "若您有心理健康相關困擾，請尋求專業人士協助。"
+    "AI 回應僅供參考，請以自身判斷為主。\n\n"
+    "開發者不對使用本工具所產生的任何後果負責。\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "✅ 輸入「同意」即表示你已閱讀並接受上述說明，開始使用。"
+)
+
+def handle_terms(line_user_id, text):
+    t = text.strip()
+    if t in ['同意', '我同意', 'agree', 'yes', 'ok', '好', '好的', '確認']:
+        save_profile(line_user_id, terms_accepted=1)
+        return None  # 繼續進入 onboarding
+    return TERMS_TEXT  # 持續顯示直到同意
 
 # ============================
 # 問卷 Onboarding
@@ -216,14 +259,16 @@ def handle_onboarding(line_user_id, text, profile):
         if line_name:
             save_profile(line_user_id, display_name=line_name, onboarding_step=2)
             return (
-                f"👋 嗨，{line_name}！我是你的 AI 生活教練 澄若水 🌊\n\n"
-                "在開始之前，想先了解你喜歡什麼樣的教練風格！\n\n"
+                f"👋 嗨，{line_name}！歡迎來到 澄若水 🌊\n\n"
+                "這是一個陪你深度覺察自己的空間。\n"
+                "在開始之前，想先了解你喜歡什麼樣的風格！\n\n"
                 + _tone_question()
             )
         else:
             save_profile(line_user_id, onboarding_step=1)
             return (
-                "👋 嗨！我是你的 AI 生活教練 澄若水 🌊\n\n"
+                "👋 嗨！歡迎來到 澄若水 🌊\n\n"
+                "這是一個陪你深度覺察自己的空間。\n"
                 "在開始之前，我想先多了解你一點！\n\n"
                 "❶ 你怎麼稱呼你自己呢？（輸入你的名字或暱稱就好）"
             )
@@ -266,13 +311,13 @@ def handle_onboarding(line_user_id, text, profile):
 
         return (
             f"太棒了，{name}！✨ 設定完成！\n\n"
-            f"📋 你的教練風格：\n"
+            f"📋 你的風格設定：\n"
             f"• 語氣：{tone_label}\n"
             f"• 溝通方式：{style_label}\n"
             f"• 引用頻率：{quote_label}\n\n"
-            "從現在開始，我就是你的專屬教練了 💪\n"
+            "從現在開始，我陪著你一起覺察成長 🌱\n"
             "有什麼想聊的，直接說吧！\n\n"
-            "（隨時可以輸入 ⚙️ /setting 重新調整教練風格）"
+            "💡 目前是「深度教練模式」，若想進行薩提爾冰山探索，輸入 /satir 即可切換。"
         )
 
     return None
@@ -298,59 +343,78 @@ def build_dify_inputs(profile):
         "current_time": current_time,
     }
 
-
 # ============================
-# Base44 Backend API 呼叫
+# Base44 整合
 # ============================
 
-BASE44_API_BASE = os.environ.get('BASE44_API_BASE', 'https://app-ffa38ee7.base44.app/functions')
+def call_base44_api(function_name, payload):
+    try:
+        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/{function_name}'
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44] {function_name} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, profile, total_messages=None):
+    try:
+        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/syncUser'
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', ''),
+            "coach_style": profile.get('coach_style', ''),
+            "quote_freq": profile.get('quote_freq', ''),
+            "total_messages": total_messages or (profile.get('total_messages') or 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ {line_user_id} 已同步")
+        else:
+            print(f"[Base44 Sync] ❌ {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
 
 def detect_and_save_goal_or_event(user_id, display_name, user_text):
-    """偵測用戶是否在設定目標/事件，自動儲存"""
     keywords_goal = ['目標', '我想', '計畫', '希望', '想要', '夢想', '目的', '預計', '打算']
     keywords_event = ['完成', '做了', '達成', '習慣', '提醒', '待辦', '記下', '追蹤']
-    
-    text_lower = text.lower()
-    detected = False
-    
-    # 簡單的關鍵字偵測（可以後續用 LLM 優化）
-    if any(kw in text for kw in keywords_goal):
+
+    detected = None
+    if any(kw in user_text for kw in keywords_goal):
         detected = 'goal'
-    elif any(kw in text for kw in keywords_event):
+    elif any(kw in user_text for kw in keywords_event):
         detected = 'event'
-    
+
     if not detected:
         return
-    
+
     try:
         payload = {
             'entity_type': detected,
-            'line_user_id': line_user_id,
-            'display_name': None or profile.get('display_name', ''),
-            'title': text[:30],  # 用前 30 字當標題
-            'description': text,
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': user_text[:30],
+            'description': user_text,
+            'type': 'short' if detected == 'goal' else 'todo',
         }
-        if detected == 'goal':
-            payload['type'] = 'short'  # 預設短期目標
-        elif detected == 'event':
-            payload['type'] = 'todo'   # 預設待辦
-        
         requests.post(
             f'{BASE44_API_BASE}/saveGoalOrEvent',
             json=payload,
             timeout=5
         )
-        print(f"[saveGoalOrEvent] 儲存 {detected} 成功: {text[:30]}")
+        print(f"[saveGoalOrEvent] 儲存 {detected} 成功: {user_text[:30]}")
     except Exception as e:
         print(f"[saveGoalOrEvent] 失敗: {e}")
-
 
 # ============================
 # Dify API 呼叫
 # ============================
 
-def call_dify(api_key, user_id, text, conversation_id, inputs):
-    url = f'{DIFY_API_URL}/chat-messages'
+def call_dify(api_key, api_url, user_id, text, conversation_id, inputs):
+    url = f'{api_url}/chat-messages'
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json'
@@ -367,102 +431,77 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
-# ============================
-# Base44 同步函數
-# ============================
-
-def sync_user_to_base44(line_user_id, display_name, profile, total_messages=None):
-    """同步用戶資料到 Base44"""
-    try:
-        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/syncUser'
-        payload = {
-            "line_user_id": line_user_id,
-            "display_name": display_name,
-            "coach_tone": profile.get('coach_tone', ''),
-            "coach_style": profile.get('coach_style', ''),
-            "quote_freq": profile.get('quote_freq', ''),
-            "total_messages": total_messages or (profile.get('total_messages') or 0),
-            "reminder_enabled": profile.get('reminder_enabled', False),
-            "reminder_time": profile.get('reminder_time', '08:00'),
-        }
-        resp = requests.post(url, json=payload, timeout=5)
-        if resp.status_code == 200:
-            print(f"[Base44 Sync] ✅ {line_user_id} 已同步")
-            return resp.json()
-        else:
-            print(f"[Base44 Sync] ❌ {resp.status_code}: {resp.text}")
-    except Exception as e:
-        print(f"[Base44 Sync] 錯誤: {e}")
-    return None
-
 def ask_dify(user_id, text, profile):
-    conversation_id = get_conversation_id(user_id)
+    mode = profile.get('mode', 'coach')
+
+    # 決定使用哪個 Dify App
+    if mode == 'satir' and DIFY_SATIR_API_KEY:
+        api_key = DIFY_SATIR_API_KEY
+        api_url = DIFY_SATIR_API_URL
+    else:
+        api_key = DIFY_API_KEY
+        api_url = DIFY_API_URL
+
+    conversation_id = get_conversation_id(user_id, mode=mode)
     inputs = build_dify_inputs(profile)
 
     try:
-        result = call_dify(DIFY_API_KEY, user_id, text, conversation_id, inputs)
+        result = call_dify(api_key, api_url, user_id, text, conversation_id, inputs)
         new_conv_id = result.get('conversation_id')
         if new_conv_id:
-            save_conversation_id(user_id, new_conv_id)
+            save_conversation_id(user_id, new_conv_id, mode=mode)
         answer = result.get('answer', '').strip()
-        
-        # 非同步同步用戶資料到 Base44（計數訊息）
-        def sync_user_async():
+
+        # 非同步更新 Base44 訊息計數
+        def sync_async():
             try:
                 requests.post(
-                    'https://app-ffa38ee7.base44.app/functions/syncUser',
+                    f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/syncUser',
                     json={
                         'line_user_id': user_id,
                         'display_name': profile.get('display_name', ''),
                         'coach_tone': profile.get('coach_tone', ''),
                         'coach_style': profile.get('coach_style', ''),
                         'quote_freq': profile.get('quote_freq', ''),
-                        'total_messages': profile.get('total_messages', 0) + 1,
+                        'total_messages': (profile.get('total_messages') or 0) + 1,
                     },
                     timeout=5
                 )
             except Exception as e:
                 print(f"[syncUser] 失敗: {e}")
-        
-        threading.Thread(target=sync_user_async, daemon=True).start()
-        
+        threading.Thread(target=sync_async, daemon=True).start()
+
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
-        if DIFY_API_KEY_FALLBACK:
+        if DIFY_API_KEY_FALLBACK and mode != 'satir':
             try:
                 print(f"[Dify Fallback] 啟動備援 | user={user_id}")
-                result = call_dify(DIFY_API_KEY_FALLBACK, user_id, text, None, inputs)
+                result = call_dify(DIFY_API_KEY_FALLBACK, DIFY_API_URL, user_id, text, None, inputs)
                 answer = result.get('answer', '').strip()
                 if answer:
                     return "⚡️ 我暫時切換到備用系統回答你：\n\n" + answer
-                return "😓 備援系統也沒回應，請稍後再試！"
             except Exception as fe:
                 print(f"[Dify Fallback] 失敗: {fe}")
         return (
             "☕ 我剛剛去泡了杯茶回來，結果忘記你問什麼了...\n\n"
-            "請稍等一下再試試看！如果一直這樣，請聯絡開發者 Chris 看看哦 🙏"
+            "請稍等一下再試試看！如果一直這樣，請聯絡開發者 🙏"
         )
 
     except requests.exceptions.HTTPError as e:
         status = e.response.status_code if e.response is not None else '未知'
-        error_msg = ''
-        try:
-            error_msg = e.response.json().get('message', '')
-        except Exception:
-            pass
-        print(f"[Dify] HTTP 錯誤 {status}: {error_msg} | user={user_id}")
+        print(f"[Dify] HTTP 錯誤 {status} | user={user_id}")
         return (
             f"🔧 我遇到了一點小問題（錯誤碼：{status}）\n\n"
-            "先去找 Chris 修一下，請稍後再試！感謝你的耐心 💪"
+            "先去找開發者修一下，請稍後再試！感謝你的耐心 💪"
         )
 
     except Exception as e:
         print(f"[Dify] 未預期錯誤: {e} | user={user_id}")
         return (
             "😵 我剛才靈魂出竅了一下，請再問我一次！\n\n"
-            "如果問題一直出現，麻煩聯絡開發者 Chris 看看，謝謝你的包容 🙏"
+            "如果問題一直出現，麻煩聯絡開發者看看，謝謝你的包容 🙏"
         )
 
 # ============================
@@ -470,40 +509,98 @@ def ask_dify(user_id, text, profile):
 # ============================
 
 HELP_TEXT = (
-    "🤖 指令說明：\n\n"
-    "🔄 /reset    — 清除對話記憶，重新開始\n"
-    "⚙️ /setting  — 重新設定教練風格\n"
-    "📋 /profile  — 查看目前的設定\n"
-    "❓ /help     — 顯示這個說明\n\n"
+    "📖 指令說明\n"
+    "━━━━━━━━━━━━━━━\n"
+    "🔄 /reset     — 清除對話記憶，重新開始\n"
+    "⚙️ /setting   — 重新設定教練風格\n"
+    "📋 /profile   — 查看目前設定\n"
+    "🌊 /satir     — 切換薩提爾冰山探索模式\n"
+    "🎯 /coach     — 切換深度教練模式\n"
+    "❓ /help      — 顯示這個說明\n"
+    "📞 /contact   — 聯絡開發者\n"
+    "━━━━━━━━━━━━━━━\n"
     "直接輸入文字就能和我對話！"
+)
+
+SATIR_INTRO = (
+    "🌊 已切換至【薩提爾冰山探索模式】\n\n"
+    "這個模式會陪你慢慢探索內心深處——\n"
+    "從表面的行為、說出口的話，\n"
+    "一層一層往下，看到感受、想法和真正的期望。\n\n"
+    "準備好了嗎？\n"
+    "告訴我最近讓你印象深刻、或讓你有些困惑的一件事吧 🌿\n\n"
+    "（輸入 /coach 可切換回教練模式）"
+)
+
+COACH_INTRO = (
+    "🎯 已切換至【深度教練模式】\n\n"
+    "我們回到目標導向的對話模式。\n"
+    "有什麼目標、計畫或困境想聊聊？直接說吧 💪\n\n"
+    "（輸入 /satir 可切換薩提爾模式）"
 )
 
 def handle_command(user_id, text, profile):
     cmd = text.strip().lower()
 
-    if cmd == '/reset':
+    if cmd in ['/reset', 'reset']:
         reset_conversation(user_id)
         return "🔄 對話記憶已清除！\n\n我們重新開始吧～有什麼想聊的？😊"
 
-    if cmd == '/help':
+    if cmd in ['/help', 'help']:
         return HELP_TEXT
 
-    if cmd == '/setting':
+    if cmd in ['/setting', 'setting']:
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
         return "⚙️ 好的！我們來重新調整一下～\n\n" + _tone_question()
 
-    if cmd == '/profile':
+    if cmd in ['/profile', 'profile']:
         name = profile.get('display_name') or '未設定'
+        mode = profile.get('mode', 'coach')
+        mode_label = '🌊 薩提爾冰山探索' if mode == 'satir' else '🎯 深度教練'
         tone_label = next((v['label'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '未設定')
         style_label = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '未設定')
         quote_label = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '未設定')
         return (
-            f"📋 你的教練設定：\n\n"
+            f"📋 你的設定\n"
+            f"━━━━━━━━━━━━━━━\n"
             f"👤 名字：{name}\n"
+            f"🔀 目前模式：{mode_label}\n"
             f"🎯 語氣：{tone_label}\n"
             f"💬 溝通方式：{style_label}\n"
-            f"📚 引用頻率：{quote_label}\n\n"
-            "用 /setting 可以重新調整～"
+            f"📚 引用頻率：{quote_label}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            "用 /setting 可以重新調整風格"
+        )
+
+    if cmd in ['/satir', 'satir', '薩提爾', '薩提爾模式', '冰山']:
+        current_mode = profile.get('mode', 'coach')
+        if current_mode == 'satir':
+            return "🌊 你目前已經在薩提爾冰山探索模式了～直接說你想探索的事情吧！"
+        save_profile(user_id, mode='satir')
+        return SATIR_INTRO
+
+    if cmd in ['/coach', 'coach', '教練', '教練模式']:
+        current_mode = profile.get('mode', 'coach')
+        if current_mode == 'coach':
+            return "🎯 你目前已經在教練模式了～有什麼目標想聊？"
+        save_profile(user_id, mode='coach')
+        return COACH_INTRO
+
+    if cmd in ['/toggle', 'toggle', '切換模式', '切換']:
+        current_mode = profile.get('mode', 'coach')
+        if current_mode == 'satir':
+            save_profile(user_id, mode='coach')
+            return COACH_INTRO
+        else:
+            save_profile(user_id, mode='satir')
+            return SATIR_INTRO
+
+    if cmd in ['/contact', 'contact', '聯絡', '聯絡開發者']:
+        return (
+            "📞 如有問題或建議，歡迎聯絡開發者：\n\n"
+            f"👨‍💻 Chris\n"
+            f"🔗 {DEVELOPER_CONTACT}\n\n"
+            "感謝你的使用與支持 🙏"
         )
 
     return None
@@ -528,36 +625,48 @@ def handle_message(event):
     user_text = event.message.text
     profile = get_profile(user_id)
 
-    # 1. 指令優先
+    # ── 0. 指令優先（任何時候都能用）
     command_response = handle_command(user_id, user_text, profile)
     if command_response:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=command_response))
         return
 
-    # 2. Onboarding 問卷（新用戶）
+    # ── 1. 免責聲明確認（全新用戶，尚未同意）
+    if not profile.get('terms_accepted'):
+        if profile['onboarding_step'] == 0:
+            # 第一次進來：顯示免責聲明
+            save_profile(user_id)  # 確保記錄存在
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=TERMS_TEXT))
+            return
+        else:
+            # 用戶已看過聲明，等待輸入「同意」
+            result = handle_terms(user_id, user_text)
+            if result is not None:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=result))
+                return
+            # 同意了，繼續到 onboarding
+            profile = get_profile(user_id)
+
+    # ── 2. Onboarding 問卷（已同意但未完成設定）
     onboarding_response = handle_onboarding(user_id, user_text, profile)
     if onboarding_response is not None:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
         return
 
-    # 3. 正常 AI 對話
+    # ── 3. 正常 AI 對話（非同步）
     replied_flag = threading.Event()
 
     def process_and_push():
         send_loading_animation(user_id, seconds=60)
         current_profile = get_profile(user_id)
         try:
-            # 同步用戶資料到 Base44
             sync_user_to_base44(user_id, current_profile)
-            
-            # 自動偵測並儲存目標/事件
             detect_and_save_goal_or_event(user_id, current_profile.get('display_name', ''), user_text)
-            
-            # 呼叫 Dify 取得回應
             ai_response = ask_dify(user_id, user_text, current_profile)
         except Exception as e:
             print(f"[handle_message] 未預期錯誤: {e}")
             ai_response = "😵 出了點小問題，請再試一次！"
+
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
