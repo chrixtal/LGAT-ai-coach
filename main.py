@@ -9,6 +9,28 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+# ============================
+# Base44 API Bridge
+# ============================
+BASE44_API_BASE = 'https://app-ffa38ee7.base44.app/functions'
+
+def call_backend_function(func_name, data):
+    """呼叫 Base44 backend function，同步資料到後台"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_BASE}/{func_name}',
+            json=data,
+            timeout=10
+        )
+        if resp.ok:
+            return resp.json()
+        print(f"[Base44] {func_name} 失敗: {resp.status_code} {resp.text[:100]}")
+        return None
+    except Exception as e:
+        print(f"[Base44] {func_name} 例外: {e}")
+        return None
+
+
 app = FastAPI()
 
 # === 環境變數 ===
@@ -464,7 +486,14 @@ def handle_message(event):
         
         # 背景同步到 Base44
         total_msgs = (current_profile.get('total_messages') or 0) + 1
-        sync_user_to_base44(user_id, current_profile, total_msgs)
+        call_backend_function('syncUser', {
+            'line_user_id': user_id,
+            'display_name': current_profile.get('display_name', ''),
+            'coach_tone': current_profile.get('coach_tone'),
+            'coach_style': current_profile.get('coach_style'),
+            'quote_freq': current_profile.get('quote_freq'),
+            'total_messages': total_msgs,
+        })
         
         # 偵測並儲存目標/事件
         goal_detected, event_detected = detect_goal_or_event(user_text)
@@ -472,7 +501,13 @@ def handle_message(event):
         
         if goal_detected:
             title = user_text.split('。')[0][:80]
-            save_goal_or_event_to_base44(user_id, display_name, 'goal', title=title, type='short')
+            call_backend_function('saveGoalOrEvent', {
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'short',
+            })
         
         if event_detected:
             title = user_text.split('。')[0][:80]
