@@ -21,6 +21,11 @@ DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 
 # ============================
+# Base44 backend API
+# ============================
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+# ============================
 # Base44 Backend Function URLs
 # ============================
 BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
@@ -267,6 +272,51 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify inputs 組裝
 # ============================
 
+# ============================
+# 偵測目標/事件關鍵詞
+# ============================
+
+def detect_goal_or_event(text):
+    """偵測用戶是否在說目標或事件，回傳 (entity_type, fields) 或 None"""
+    lower_text = text.lower()
+
+    # 目標關鍵詞
+    goal_keywords = ['目標', '想要', '想達成', '想學', '想完成', '我的夢想', '計畫', '目標是', '要達成']
+    # 事件關鍵詞
+    event_keywords = ['待辦', '要做', '做完', '打卡', '習慣', '完成了', '做到了', '里程碑', '達成']
+
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords) and not is_goal
+
+    if is_goal:
+        return ('goal', {'title': text[:30], 'type': 'short'})
+    elif is_event:
+        return ('event', {'title': text[:30], 'type': 'todo'})
+    return None
+
+def call_base44_api(endpoint, data):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f"{BASE44_API_URL}/{endpoint}"
+        resp = requests.post(url, json=data, timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44 API] {endpoint} 失敗: {e}")
+        return None
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": line_user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+        "total_messages": profile.get('total_messages', 0) + 1,
+    }
+    return call_base44_api("syncUser", payload)
+
 def build_dify_inputs(profile):
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
@@ -455,6 +505,23 @@ def handle_message(event):
         if not replied_flag.is_set():
             replied_flag.set()
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+
+    
+    # 背景同步用戶資料到 Base44
+    def sync_and_detect():
+        sync_user_to_base44(user_id, profile)
+        detected = detect_goal_or_event(user_text)
+        if detected:
+            entity_type, fields = detected
+            call_base44_api("saveGoalOrEvent", {
+                "entity_type": entity_type,
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                **fields
+            })
+
+    threading.Thread(target=sync_and_detect, daemon=True).start()
+    
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
