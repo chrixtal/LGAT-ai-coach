@@ -327,6 +327,52 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify
 # ============================
 
+# ============================
+# Base44 API 串接
+# ============================
+
+def sync_user_to_base44(user_id, profile):
+    """每次對話完成後，同步用戶資料到 Base44"""
+    try:
+        api_url = os.environ.get('BASE44_SYNC_URL', 'https://app-ffa38ee7.base44.app/functions/syncUser')
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0) + 1,
+        }
+        resp = requests.post(api_url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶資料已同步: {user_id}")
+    except Exception as e:
+        print(f"[Base44] 同步異常: {e}")
+
+def detect_and_save_goal_or_event(user_id, user_text, profile):
+    """檢查對話中的目標/事件關鍵詞，自動儲存"""
+    try:
+        goal_kw = ['目標', '想', '要達', '計畫', '決定', '打算']
+        event_kw = ['完成', '做', '打卡', '習慣', '待辦', '任務']
+        
+        is_goal = any(k in user_text for k in goal_kw)
+        is_event = any(k in user_text for k in event_kw)
+        
+        if is_goal or is_event:
+            api_url = os.environ.get('BASE44_SAVE_URL', 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent')
+            payload = {
+                "entity_type": "goal" if is_goal else "event",
+                "line_user_id": user_id,
+                "display_name": profile.get('display_name', ''),
+                "title": user_text[:50],
+                "type": "short" if is_goal else "todo",
+            }
+            resp = requests.post(api_url, json=payload, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Base44] 已儲存: {user_id}")
+    except Exception as e:
+        print(f"[Base44] 偵測異常: {e}")
+
 def build_dify_inputs(profile):
     tone_dify = next((v['dify'] for v in TONE_OPTIONS.values() if v['value'] == profile.get('coach_tone')), '平衡理性')
     style_dify = next((v['dify'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '循循善誘、引導探索')
