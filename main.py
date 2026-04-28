@@ -163,42 +163,6 @@ def call_base44_api(function_name, payload):
         print(f"[Base44] {function_name} 失敗: {e}")
         return None
 
-def detect_and_save_goal_or_event(user_id, display_name, user_text):
-    """自動偵測用戶輸入中的目標/事件，並儲存到 Base44"""
-    if not BASE44_APP_ID:
-        return
-    
-    text = user_text.lower()
-    goal_keywords = ['目標', '想', '希望', '計畫', '要達成', '想要']
-    event_keywords = ['完成', '做', '習慣', '待辦', '打卡', '記錄', '已經', '完了']
-    
-    goal_detected = any(kw in text for kw in goal_keywords)
-    event_detected = any(kw in text for kw in event_keywords)
-    
-    if goal_detected and len(user_text) > 10:
-        call_base44_api('saveGoalOrEvent', {
-            'entity_type': 'goal',
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'title': user_text[:50],
-            'description': user_text,
-            'type': 'short',
-        })
-    
-    if event_detected and len(user_text) > 5:
-        call_base44_api('saveGoalOrEvent', {
-            'entity_type': 'event',
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'title': user_text[:50],
-            'type': 'todo',
-            'note': user_text,
-        })
-
-# ============================
-# LINE helpers
-# ============================
-
 def get_line_display_name(user_id):
     """從 LINE API 抓用戶暱稱"""
     try:
@@ -341,26 +305,6 @@ def build_dify_inputs(profile):
 
 BASE44_API_BASE = os.environ.get('BASE44_API_BASE', 'https://app-ffa38ee7.base44.app/functions')
 
-def sync_user_to_base44(line_user_id, profile):
-    """同步用戶資料到 Base44"""
-    try:
-        requests.post(
-            f'{BASE44_API_BASE}/syncUser',
-            json={
-                'line_user_id': line_user_id,
-                'display_name': profile.get('display_name', ''),
-                'coach_tone': profile.get('coach_tone', 'balanced'),
-                'coach_style': profile.get('coach_style', 'exploratory'),
-                'quote_freq': profile.get('quote_freq', 'sometimes'),
-                'total_messages': profile.get('total_messages', 0),
-                'reminder_enabled': profile.get('reminder_enabled', False),
-                'reminder_time': profile.get('reminder_time', '08:00'),
-            },
-            timeout=5
-        )
-    except Exception as e:
-        print(f"[syncUser] 失敗: {e}")
-
 def detect_and_save_goal_or_event(user_id, display_name, user_text):
     """偵測用戶是否在設定目標/事件，自動儲存"""
     keywords_goal = ['目標', '我想', '計畫', '希望', '想要', '夢想', '目的', '預計', '打算']
@@ -422,6 +366,34 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+# ============================
+# Base44 同步函數
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, profile, total_messages=None):
+    """同步用戶資料到 Base44"""
+    try:
+        url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/syncUser'
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "coach_tone": profile.get('coach_tone', ''),
+            "coach_style": profile.get('coach_style', ''),
+            "quote_freq": profile.get('quote_freq', ''),
+            "total_messages": total_messages or (profile.get('total_messages') or 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] ✅ {line_user_id} 已同步")
+            return resp.json()
+        else:
+            print(f"[Base44 Sync] ❌ {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+    return None
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
