@@ -532,6 +532,63 @@ def detect_and_save_goals_events(user_id, user_text, dify_response, profile):
             print(f"[Base44] saveGoalOrEvent 失敗: {e}")
 
 
+# ============================
+# Base44 Backend 輔助函數
+# ============================
+
+def sync_user_to_backend(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+        }
+        resp = requests.post(BASE44_SYNC_USER, json=payload, timeout=5)
+        print(f"[Base44] syncUser: {resp.status_code} | {line_user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser 失敗: {e}")
+
+def detect_and_save_goal_event(line_user_id, display_name, text):
+    """偵測對話中的目標/事件關鍵詞並儲存"""
+    try:
+        # 關鍵詞匹配
+        goal_keywords = ['目標', '想要', '想達成', '計畫', '要完成', '希望', '夢想']
+        event_keywords = ['今天', '明天', '待辦', '習慣', '打卡', '完成']
+        
+        has_goal = any(kw in text for kw in goal_keywords)
+        has_event = any(kw in text for kw in event_keywords)
+        
+        if has_goal:
+            # 簡單地抽取一些文字作為目標標題
+            title = text[:50] if len(text) > 0 else '新目標'
+            payload = {
+                'entity_type': 'goal',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'short',  # 預設短期目標
+            }
+            resp = requests.post(BASE44_SAVE_GOAL_EVENT, json=payload, timeout=5)
+            print(f"[Base44] 目標已儲存: {resp.status_code}")
+        
+        if has_event:
+            title = text[:50] if len(text) > 0 else '新事件'
+            payload = {
+                'entity_type': 'event',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'todo',
+            }
+            resp = requests.post(BASE44_SAVE_GOAL_EVENT, json=payload, timeout=5)
+            print(f"[Base44] 事件已儲存: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] 偵測/儲存失敗: {e}")
+
+# ============================
 def ask_dify(user_id, text, profile):
     # 同步用戶資料到 Base44
     sync_user_to_base44(user_id, profile)
