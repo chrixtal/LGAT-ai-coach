@@ -8,6 +8,63 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+# ============================
+# 目標/事件關鍵詞偵測
+# ============================
+GOAL_SHORT_KEYWORDS = ['希望', '想要', '打算', '這週', '本月', '計畫', '要做', '想達成']
+GOAL_MEDIUM_KEYWORDS = ['三個月', '半年', '中期', '季度']
+GOAL_LONG_KEYWORDS = ['一年', '明年', '長期', '五年', '終身']
+EVENT_HABIT_KEYWORDS = ['習慣', '每天', '每週', '打卡', '堅持', '養成']
+EVENT_TODO_KEYWORDS = ['要做', '需要', '今天', '明天', '任務', '完成']
+EVENT_MILESTONE_KEYWORDS = ['達成', '完成', '通過', '拿到', '升職', '考上']
+PROGRESS_UPDATE_KEYWORDS = ['做了', '進度', '進展', '怎麼樣', '更新', '完成了']
+
+def detect_goal_or_event(text):
+    """偵測文字中的目標/事件關鍵詞，回傳 (type, category, matched_keyword)"""
+    text_lower = text.lower()
+    
+    # 偵測進度更新
+    for kw in PROGRESS_UPDATE_KEYWORDS:
+        if kw in text_lower:
+            return ('goal_progress', None, kw)
+    
+    # 偵測目標
+    for kw in GOAL_LONG_KEYWORDS:
+        if kw in text_lower:
+            return ('goal', 'long', kw)
+    for kw in GOAL_MEDIUM_KEYWORDS:
+        if kw in text_lower:
+            return ('goal', 'medium', kw)
+    for kw in GOAL_SHORT_KEYWORDS:
+        if kw in text_lower:
+            return ('goal', 'short', kw)
+    
+    # 偵測事件
+    for kw in EVENT_HABIT_KEYWORDS:
+        if kw in text_lower:
+            return ('event', 'habit', kw)
+    for kw in EVENT_MILESTONE_KEYWORDS:
+        if kw in text_lower:
+            return ('event', 'milestone', kw)
+    for kw in EVENT_TODO_KEYWORDS:
+        if kw in text_lower:
+            return ('event', 'todo', kw)
+    
+    return (None, None, None)
+
+def call_backend_api(endpoint, data):
+    """呼叫 Base44 backend function"""
+    base_url = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+    url = f'{base_url}/functions/{endpoint}'
+    try:
+        resp = requests.post(url, json=data, timeout=10)
+        print(f'[Backend API] {endpoint}: {resp.status_code}')
+        return resp.json() if resp.ok else None
+    except Exception as e:
+        print(f'[Backend API] {endpoint} 失敗: {e}')
+        return None
+
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -653,31 +710,52 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=onboarding_response))
         return
 
-    # 3. 正常 AI 對話
+    # 3. 正常 AI 對話 + 後台同步
     replied_flag = threading.Event()
 
     def process_and_push():
-        # 同步用戶資料到 Base44
-        sync_user_to_base44(user_id, profile)
-        
-        # 偵測目標/事件關鍵詞
-        detect_and_save_goal_or_event(user_id, user_text, profile)
-        
-        # 送 loading animation
-        send_loading_animation(user_id, seconds=60)
-        
-        current_profile = get_profile(user_id)
         try:
+            # (a) 同步用戶資料到 Base44
+            call_backend_api('syncUser', {
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+                'coach_tone': profile.get('coach_tone', 'balanced'),
+                'coach_style': profile.get('coach_style', 'exploratory'),
+                'quote_freq': profile.get('quote_freq', 'sometimes'),
+                'total_messages': (profile.get('total_messages', 0) or 0) + 1,
+                'reminder_enabled': profile.get('reminder_enabled', False),
+                'reminder_time': profile.get('reminder_time', '08:00'),
+            })
+
+            # (b) 偵測並儲存目標/事件
+            entity_type, category, keyword = detect_goal_or_event(user_text)
+            if entity_type:
+                call_backend_api('saveGoalOrEvent', {
+                    'entity_type': entity_type,
+                    'line_user_id': user_id,
+                    'display_name': profile.get('display_name', ''),
+                    'title': user_text[:50],  # 用用戶的訊息作為標題
+                    'description': user_text,
+                    'type': category,
+                    'progress_note': user_text if entity_type == 'goal_progress' else '',
+                })
+
+            # (c) 送 loading animation + 等 Dify 回應
+            send_loading_animation(user_id, seconds=60)
+            current_profile = get_profile(user_id)
             ai_response = ask_dify(user_id, user_text, current_profile)
+            
+            if not replied_flag.is_set():
+                replied_flag.set()
+                line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
         except Exception as e:
-            print(f"[handle_message] 異常: {e}")
-            ai_response = "😵 出了點小問題，請再試一次！"
-        
-        if not replied_flag.is_set():
-            replied_flag.set()
-            line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
+            print(f"[handle_message] 未預期錯誤: {e}")
+            if not replied_flag.is_set():
+                replied_flag.set()
+                line_bot_api.push_message(user_id, TextSendMessage(text="😵 出了點小問題，請再試一次！"))
 
     threading.Thread(target=process_and_push, daemon=True).start()
+
 
 @app.get("/health")
 async def health():
