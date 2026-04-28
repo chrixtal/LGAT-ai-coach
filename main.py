@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from base44_bridge import sync_user_to_base44, save_goal_or_event, detect_goal_or_event
 import threading
 import requests
 from fastapi import FastAPI, Request, HTTPException
@@ -99,29 +100,6 @@ init_db()
 
 # ============================
 # Base44 API 呼叫
-# ============================
-
-def call_base44_function(func_name, data):
-    """呼叫 Base44 backend function"""
-    try:
-        url = f"{BASE44_FUNCTIONS_URL}/{func_name}"
-        headers = {
-            "Authorization": f"Bearer {BASE44_SERVICE_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        resp = requests.post(url, json=data, headers=headers, timeout=10)
-        if resp.status_code >= 400:
-            print(f"[Base44 {func_name}] 錯誤 ({resp.status_code}): {resp.text[:100]}")
-            return None
-        result = resp.json()
-        print(f"[Base44 {func_name}] ✅ {user_id if 'user_id' in data else data.get('line_user_id', '?')}")
-        return result
-    except Exception as e:
-        print(f"[Base44 {func_name}] 異常: {e}")
-        return None
-
-# ============================
-# DB helpers
 # ============================
 
 def get_conversation_id(line_user_id):
@@ -306,56 +284,6 @@ def build_dify_inputs(profile):
 
 BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
 
-def call_base44_function(func_name, payload):
-    """呼叫 Base44 backend function"""
-    url = f'{BASE44_APP_URL}/functions/{func_name}'
-    headers = {'Content-Type': 'application/json'}
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"[Base44 {func_name}] 失敗: {e}")
-        return None
-
-def detect_and_save_goal_or_event(user_id, display_name, text):
-    """偵測用戶輸入中的目標或事件關鍵詞，自動儲存到 Base44"""
-    # 關鍵詞判斷（簡單版本）
-    goal_keywords = ['目標', '想要', '計畫', '達成', '學', '改善', '提升', '完成']
-    event_keywords = ['今天', '明天', '做', '完成', '習慣', '打卡', '提醒']
-    
-    text_lower = text.lower()
-    is_goal = any(kw in text for kw in goal_keywords)
-    is_event = any(kw in text for kw in event_keywords) and not is_goal
-    
-    if is_goal:
-        # 提取標題（前 30 個字）
-        title = text[:30].replace('我想', '').replace('我要', '').strip()
-        call_base44_function('saveGoalOrEvent', {
-            'entity_type': 'goal',
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'title': title or '未命名目標',
-            'description': text,
-            'type': 'short',  # 預設短期，後續可透過對話改
-        })
-        print(f"[Goal] 已記錄: {title} | user={user_id}")
-    elif is_event:
-        title = text[:30].strip()
-        call_base44_function('saveGoalOrEvent', {
-            'entity_type': 'event',
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'title': title or '未命名事件',
-            'type': 'todo',
-            'note': text,
-        })
-        print(f"[Event] 已記錄: {title} | user={user_id}")
-
-# ============================
-# Dify API
-# ============================
-
 def call_dify(api_key, user_id, text, conversation_id, inputs):
     url = f'{DIFY_API_URL}/chat-messages'
     headers = {
@@ -410,47 +338,16 @@ def ask_dify(user_id, text, profile):
 # ============================
 
 def detect_and_save_goal_or_event(user_id, display_name, text):
-    """簡單關鍵詞偵測，判斷是否儲存目標或事件"""
-    text_lower = text.lower()
-    
-    goal_keywords = ['目標', '想要', '要達到', '計畫', '想完成', '希望', '夢想']
-    event_keywords = ['待辦', 'todo', '要做', '完成', '做了', '習慣', '打卡']
-    
-    is_goal = any(kw in text_lower for kw in goal_keywords) and len(text) > 5
-    is_event = any(kw in text_lower for kw in event_keywords) and len(text) > 3
-    
-    if is_goal:
-        call_base44_function('saveGoalOrEvent', {
-            'entity_type': 'goal',
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'title': text[:50],
-            'description': text,
-            'type': 'short',
-        })
-        print(f"[偵測] 目標: {text[:30]} (user={user_id})")
-    elif is_event:
-        call_base44_function('saveGoalOrEvent', {
-            'entity_type': 'event',
-            'line_user_id': user_id,
-            'display_name': display_name,
-            'title': text[:50],
-            'type': 'todo',
-        })
-        print(f"[偵測] 事件: {text[:30]} (user={user_id})")
-
-# ============================
-# 指令處理
-# ============================
-
-HELP_TEXT = (
-    "🤖 指令說明：\n\n"
-    "🔄 /reset    — 清除對話記憶\n"
-    "⚙️ /setting  — 重新設定教練風格\n"
-    "📋 /profile  — 查看設定\n"
-    "❓ /help     — 說明"
-)
-
+    """使用 bridge 偵測與儲存目標或事件"""
+    entity_type, fields = detect_goal_or_event(text)
+    if entity_type:
+        save_goal_or_event(
+            entity_type=entity_type,
+            line_user_id=user_id,
+            display_name=display_name,
+            **fields
+        )
+        print(f"[偵測] {entity_type}: {text[:30]} (user={user_id})")
 def handle_command(user_id, text, profile):
     cmd = text.strip().lower()
 
