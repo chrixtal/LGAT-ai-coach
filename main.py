@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
+import json
 import datetime
 import zoneinfo
 
@@ -18,6 +19,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app.base44.com')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 
 # ============================
