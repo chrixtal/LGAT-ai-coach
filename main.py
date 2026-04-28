@@ -504,6 +504,55 @@ def handle_command(user_id, text, profile):
 # Webhook
 # ============================
 
+
+# ============================
+# 目標/事件關鍵詞偵測
+# ============================
+
+GOAL_KEYWORDS = {
+    'short': ['希望', '想要', '打算', '這週', '本月', '明天', '下週'],
+    'medium': ['三個月', '半年', '中期', '季度'],
+    'long': ['一年', '明年', '長期', '五年'],
+}
+
+EVENT_KEYWORDS = {
+    'habit': ['習慣', '每天', '每週', '打卡', '堅持'],
+    'todo': ['要做', '需要', '今天', '任務', '得完成'],
+    'milestone': ['達成', '完成', '通過', '拿到', '升職'],
+}
+
+def detect_goal_or_event(text: str):
+    """
+    回傳 dict：{ 'type': 'goal'|'event', 'subtype': str, 'keywords': list }
+    若無關鍵詞則回傳 None
+    """
+    for goal_type, keywords in GOAL_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return {'type': 'goal', 'subtype': goal_type, 'keywords': [kw]}
+    
+    for event_type, keywords in EVENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return {'type': 'event', 'subtype': event_type, 'keywords': [kw]}
+    
+    return None
+
+async def call_backend_function(function_name: str, payload: dict):
+    """呼叫 Base44 backend function"""
+    try:
+        base_url = os.environ.get('BASE44_BACKEND_URL', 'https://app-ffa38ee7.base44.app')
+        url = f'{base_url}/functions/{function_name}'
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[Backend] {function_name} failed: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        print(f"[Backend] {function_name} error: {e}")
+        return None
+
 @app.post("/callback")
 async def callback(request: Request):
     signature = request.headers.get('X-Line-Signature', '')
@@ -556,3 +605,60 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+def sync_user_data(user_id: str, profile: dict):
+    """同步用戶資料到 Base44"""
+    payload = {
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "coach_style": profile.get('coach_style', 'exploratory'),
+        "quote_freq": profile.get('quote_freq', 'sometimes'),
+    }
+    # 注意：total_messages 在 ask_dify 後會遞增
+    result = requests.post(
+        'https://app-ffa38ee7.base44.app/functions/syncUser',
+        json=payload,
+        timeout=5
+    )
+    if result.status_code == 200:
+        print(f"[syncUser] OK for {user_id}")
+    else:
+        print(f"[syncUser] Failed: {result.status_code}")
+
+def detect_and_save(user_id: str, text: str, profile: dict):
+    """偵測目標/事件，並存到 Base44"""
+    detection = detect_goal_or_event(text)
+    if not detection:
+        return
+    
+    entity_type = detection['type']
+    subtype = detection['subtype']
+    
+    # 從文本抽出簡單的標題（第一句或前 50 字）
+    title = text.split('。')[0][:50] if '。' in text else text[:50]
+    
+    payload = {
+        "entity_type": entity_type,
+        "line_user_id": user_id,
+        "display_name": profile.get('display_name', ''),
+        "title": title,
+        "type": subtype,
+    }
+    
+    if entity_type == 'goal':
+        payload["target_date"] = ""
+    elif entity_type == 'event':
+        payload["recurrence"] = "none"
+    
+    result = requests.post(
+        'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+        json=payload,
+        timeout=5
+    )
+    if result.status_code == 200:
+        print(f"[saveGoalOrEvent] 已儲存 {entity_type}/{subtype}: {title}")
+    else:
+        print(f"[saveGoalOrEvent] Failed: {result.status_code} {result.text}")
+
+
+
