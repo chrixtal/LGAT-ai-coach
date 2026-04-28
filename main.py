@@ -65,6 +65,11 @@ def call_backend_api(endpoint, data):
         return None
 
 
+# Backend function URLs (Base44)
+BACKEND_BASE_URL = os.environ.get('BACKEND_BASE_URL', 'https://app-ffa38ee7.base44.app')
+BACKEND_SYNC_USER_URL = f'{BACKEND_BASE_URL}/functions/syncUser'
+BACKEND_SAVE_GOAL_URL = f'{BACKEND_BASE_URL}/functions/saveGoalOrEvent'
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -596,6 +601,10 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 後台同步（背景執行，不阻擋回應）
+        threading.Thread(target=_sync_to_backend, args=(user_id, text, profile, answer), daemon=True).start()
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -647,6 +656,54 @@ HELP_TEXT = (
     "❓ /help     — 顯示這個說明\n\n"
     "直接輸入文字就能和我對話！"
 )
+
+
+def _sync_to_backend(user_id, text, profile, answer):
+    """背景同步用戶資料和偵測目標/事件到 Base44 後台"""
+    try:
+        # 同步用戶資料
+        sync_data = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0) + 1,
+        }
+        sync_resp = requests.post(BACKEND_SYNC_USER_URL, json=sync_data, timeout=5)
+        if sync_resp.status_code == 200:
+            print(f"[Backend Sync] User {user_id} synced")
+        else:
+            print(f"[Backend Sync] Failed: {sync_resp.status_code}")
+        
+        # 偵測目標/事件
+        entity_type, category, keyword = detect_goal_or_event(text)
+        if entity_type:
+            goal_data = {
+                'entity_type': entity_type,
+                'line_user_id': user_id,
+                'display_name': profile.get('display_name', ''),
+            }
+            
+            if entity_type == 'goal':
+                goal_data['type'] = category
+                goal_data['title'] = text[:50]
+                goal_data['description'] = f"用戶輸入：{text}"
+            elif entity_type == 'event':
+                goal_data['type'] = category
+                goal_data['title'] = text[:50]
+                goal_data['note'] = f"用戶輸入：{text}"
+            elif entity_type == 'goal_progress':
+                goal_data['progress_note'] = text
+            
+            goal_resp = requests.post(BACKEND_SAVE_GOAL_URL, json=goal_data, timeout=5)
+            if goal_resp.status_code == 200:
+                print(f"[Backend Goal] Saved {entity_type} for {user_id}")
+            else:
+                print(f"[Backend Goal] Failed: {goal_resp.status_code}")
+    except Exception as e:
+        print(f"[Backend Sync] Error: {e}")
+
 
 def handle_command(user_id, text, profile):
     cmd = text.strip().lower()
