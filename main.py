@@ -301,6 +301,58 @@ def build_dify_inputs(profile):
     }
 
 # ============================
+# Base44 API 整合
+# ============================
+
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    url = f'{BASE44_APP_URL}/functions/{func_name}'
+    headers = {'Content-Type': 'application/json'}
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[Base44 {func_name}] 失敗: {e}")
+        return None
+
+def detect_and_save_goal_or_event(user_id, display_name, text):
+    """偵測用戶輸入中的目標或事件關鍵詞，自動儲存到 Base44"""
+    # 關鍵詞判斷（簡單版本）
+    goal_keywords = ['目標', '想要', '計畫', '達成', '學', '改善', '提升', '完成']
+    event_keywords = ['今天', '明天', '做', '完成', '習慣', '打卡', '提醒']
+    
+    text_lower = text.lower()
+    is_goal = any(kw in text for kw in goal_keywords)
+    is_event = any(kw in text for kw in event_keywords) and not is_goal
+    
+    if is_goal:
+        # 提取標題（前 30 個字）
+        title = text[:30].replace('我想', '').replace('我要', '').strip()
+        call_base44_function('saveGoalOrEvent', {
+            'entity_type': 'goal',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title or '未命名目標',
+            'description': text,
+            'type': 'short',  # 預設短期，後續可透過對話改
+        })
+        print(f"[Goal] 已記錄: {title} | user={user_id}")
+    elif is_event:
+        title = text[:30].strip()
+        call_base44_function('saveGoalOrEvent', {
+            'entity_type': 'event',
+            'line_user_id': user_id,
+            'display_name': display_name,
+            'title': title or '未命名事件',
+            'type': 'todo',
+            'note': text,
+        })
+        print(f"[Event] 已記錄: {title} | user={user_id}")
+
+# ============================
 # Dify API
 # ============================
 
