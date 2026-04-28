@@ -66,6 +66,76 @@ QUOTE_OPTIONS = _parse_options(os.environ.get(
 ))
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+
+# --- Backend 串接 ---
+import requests
+import re
+import time as time_module
+
+SYNC_USER_URL = "https://app-ffa38ee7.base44.app/functions/syncUser"
+SAVE_GOAL_OR_EVENT_URL = "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent"
+
+def sync_user_to_backend(line_user_id, profile, total_messages=0):
+    try:
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get("display_name", ""),
+            "coach_tone": profile.get("coach_tone", "balanced"),
+            "coach_style": profile.get("coach_style", "exploratory"),
+            "quote_freq": profile.get("quote_freq", "sometimes"),
+            "total_messages": total_messages,
+            "reminder_enabled": profile.get("reminder_enabled", False),
+            "reminder_time": profile.get("reminder_time", "08:00"),
+            "plan": profile.get("plan", "free"),
+        }
+        resp = requests.post(SYNC_USER_URL, json=payload, timeout=5)
+        if resp.ok:
+            print(f"[syncUser] ✅ {line_user_id}")
+    except Exception as e:
+        print(f"[syncUser] ❌: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    goal_patterns = [
+        r'(我想|目標|我要|計畫)([^。!?]*?)(?:,|。|!|$)',
+        r'(今年|這個月|下個月).*?(學|做|完成|達成)([^。!?]*)',
+    ]
+    event_patterns = [
+        r'(完成了|做了|跑|讀|運動|健身)([^。!?]*)',
+        r'(打卡|完成)([^。!?]*)',
+    ]
+    
+    for pattern in goal_patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            goal_title = ''.join(match).strip()[:50]
+            if len(goal_title) > 3:
+                try:
+                    requests.post(SAVE_GOAL_OR_EVENT_URL, json={
+                        "entity_type": "goal",
+                        "line_user_id": line_user_id,
+                        "display_name": display_name,
+                        "title": goal_title,
+                        "type": "short",
+                    }, timeout=5)
+                except:
+                    pass
+    
+    for pattern in event_patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            event_title = ''.join(match).strip()[:50]
+            if len(event_title) > 2:
+                try:
+                    requests.post(SAVE_GOAL_OR_EVENT_URL, json={
+                        "entity_type": "event",
+                        "line_user_id": line_user_id,
+                        "display_name": display_name,
+                        "title": event_title,
+                        "type": "todo",
+                    }, timeout=5)
+                except:
+                    pass
+
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # === SQLite 初始化 ===
