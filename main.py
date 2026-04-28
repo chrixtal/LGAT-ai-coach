@@ -511,6 +511,16 @@ def handle_message(event):
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
+    # 背景檢查是否有提醒該發
+    def check_reminders():
+        try:
+            api_url = "https://app-ffa38ee7.base44.app/functions/sendReminders"
+            requests.post(api_url, timeout=10, json={})
+        except Exception as e:
+            print(f"[check_reminders] 失敗: {e}")
+
+    threading.Thread(target=check_reminders, daemon=True).start()
+
 # ============================
 # 健康檢查
 # ============================
