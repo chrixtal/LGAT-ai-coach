@@ -545,6 +545,8 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        # 背景同步用戶資料
+        threading.Thread(target=sync_user_to_base44, args=(user_id, profile), daemon=True).start()
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify] 連線問題: {e}")
