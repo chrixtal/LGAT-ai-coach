@@ -9,6 +9,134 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+
+# ============================
+# Base44 API 整合
+# ============================
+
+BASE44_API_URL = "https://app-ffa38ee7.base44.app/functions"
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """每次對話都同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f"{BASE44_API_URL}/syncUser",
+            json={
+                "line_user_id": line_user_id,
+                "display_name": display_name,
+                "coach_tone": coach_tone,
+                "coach_style": coach_style,
+                "quote_freq": quote_freq,
+                "total_messages": total_messages,
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser 成功: {line_user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser 異常: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測用戶是否在說目標或事件，自動儲存"""
+    import re
+    
+    short_keywords = ["希望", "想要", "打算", "這週", "本月", "接下來一個月", "短期"]
+    medium_keywords = ["三個月", "半年", "中期目標", "中期"]
+    long_keywords = ["一年", "明年", "長期目標", "長期", "五年"]
+    habit_keywords = ["習慣", "每天", "每週", "打卡", "堅持", "養成", "戒除"]
+    todo_keywords = ["要做", "需要", "必須", "今天", "明天", "這週", "待辦", "任務"]
+    milestone_keywords = ["達成", "完成", "通過", "拿到", "升職", "成就"]
+    progress_keywords = ["做了", "完成", "進度", "進展", "怎麼樣", "如何了", "情況"]
+    
+    clean_text = re.sub(r'[。，！？；：、]+', '', text).lower()
+    
+    # 偵測進度更新
+    for kw in progress_keywords:
+        if kw in clean_text:
+            last_sentence = text.split('。')[-1].split('！')[-1].split('？')[-1].strip()
+            if last_sentence and len(last_sentence) > 2:
+                try:
+                    requests.post(
+                        f"{BASE44_API_URL}/saveGoalOrEvent",
+                        json={
+                            "entity_type": "goal_progress",
+                            "line_user_id": line_user_id,
+                            "display_name": display_name,
+                            "progress_note": last_sentence,
+                        },
+                        timeout=5
+                    )
+                    print(f"[Base44] 更新進度: {last_sentence[:30]}")
+                except Exception as e:
+                    print(f"[Base44] 進度更新失敗: {e}")
+            return
+    
+    # 偵測目標
+    goal_type = None
+    for kw in short_keywords:
+        if kw in clean_text:
+            goal_type = "short"
+            break
+    if not goal_type:
+        for kw in medium_keywords:
+            if kw in clean_text:
+                goal_type = "medium"
+                break
+    if not goal_type:
+        for kw in long_keywords:
+            if kw in clean_text:
+                goal_type = "long"
+                break
+    
+    if goal_type and ("目標" in text or "想" in text or "希望" in text):
+        goal_title = text[:40].strip()
+        if len(goal_title) > 3:
+            try:
+                requests.post(
+                    f"{BASE44_API_URL}/saveGoalOrEvent",
+                    json={
+                        "entity_type": "goal",
+                        "line_user_id": line_user_id,
+                        "display_name": display_name,
+                        "title": goal_title,
+                        "type": goal_type,
+                    },
+                    timeout=5
+                )
+                print(f"[Base44] 新增目標({goal_type}): {goal_title}")
+            except Exception as e:
+                print(f"[Base44] 目標儲存失敗: {e}")
+            return
+    
+    # 偵測事件
+    event_type = None
+    if any(kw in clean_text for kw in habit_keywords):
+        event_type = "habit"
+    elif any(kw in clean_text for kw in milestone_keywords):
+        event_type = "milestone"
+    elif any(kw in clean_text for kw in todo_keywords):
+        event_type = "todo"
+    
+    if event_type:
+        event_title = text[:40].strip()
+        if len(event_title) > 2:
+            try:
+                requests.post(
+                    f"{BASE44_API_URL}/saveGoalOrEvent",
+                    json={
+                        "entity_type": "event",
+                        "line_user_id": line_user_id,
+                        "display_name": display_name,
+                        "title": event_title,
+                        "type": event_type,
+                    },
+                    timeout=5
+                )
+                print(f"[Base44] 新增事件({event_type}): {event_title}")
+            except Exception as e:
+                print(f"[Base44] 事件儲存失敗: {e}")
+
+
 app = FastAPI()
 
 # --- 環境變數 ---
