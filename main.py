@@ -9,6 +9,10 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+# Base44 同步
+import requests
+import re as regex_re
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -431,7 +435,100 @@ def call_dify(api_key, api_url, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# Base44 資料庫同步
+# ============================
+
+BASE44_URL = "https://app-ffa38ee7.base44.app/functions"
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+            "plan": profile.get('plan', 'free'),
+        }
+        resp = requests.post(f"{BASE44_URL}/syncUser", json=payload, timeout=5)
+        if resp.ok:
+            print(f"[Base44] syncUser OK for {line_user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測用戶輸入中的目標/事件關鍵詞，自動儲存"""
+    text_lower = text.lower()
+    
+    goal_patterns = {
+        'short': [r'想要\w{2,6}', r'打算\w{2,6}', r'想在\d*天內', r'下個月'],
+        'medium': [r'3[到-]6個月', r'半年內', r'今年\w{2,4}'],
+        'long': [r'明年', r'長期', r'今年底', r'一年內'],
+    }
+    
+    event_patterns = {
+        'habit': [r'每天\w{2,6}', r'每週\w{2,6}', r'堅持\w{2,6}', r'養成\w{4}'],
+        'todo': [r'要\w{2,6}', r'需要\w{2,6}', r'今天\w{2,6}', r'明天\w{2,6}'],
+        'milestone': [r'完成\w{2,6}', r'達到\w{2,6}', r'達成\w{2,6}', r'通過\w{4}'],
+    }
+    
+    detected = []
+    
+    for goal_type, patterns in goal_patterns.items():
+        for pattern in patterns:
+            matches = regex_re.findall(pattern, text_lower)
+            if matches:
+                for match in matches:
+                    detected.append(('goal', goal_type, match, text))
+                break
+    
+    for event_type, patterns in event_patterns.items():
+        for pattern in patterns:
+            matches = regex_re.findall(pattern, text_lower)
+            if matches:
+                for match in matches:
+                    detected.append(('event', event_type, match, text))
+                break
+    
+    for item_type, sub_type, keyword, full_text in detected:
+        try:
+            if item_type == 'goal':
+                payload = {
+                    "entity_type": "goal",
+                    "line_user_id": line_user_id,
+                    "display_name": display_name,
+                    "title": keyword,
+                    "description": full_text[:100],
+                    "type": sub_type,
+                }
+            else:
+                payload = {
+                    "entity_type": "event",
+                    "line_user_id": line_user_id,
+                    "display_name": display_name,
+                    "title": keyword,
+                    "type": sub_type,
+                    "note": full_text[:100],
+                }
+            
+            resp = requests.post(f"{BASE44_URL}/saveGoalOrEvent", json=payload, timeout=5)
+            if resp.ok:
+                print(f"[Base44] Saved {item_type} ({sub_type}): {keyword}")
+        except Exception as e:
+            print(f"[Base44] Save error: {e}")
+
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44
+    sync_user_to_base44(user_id, profile)
+    
     mode = profile.get('mode', 'coach')
 
     # 決定使用哪個 Dify App
