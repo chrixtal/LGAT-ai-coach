@@ -300,6 +300,32 @@ def handle_onboarding(line_user_id, text, profile):
     return None
 
 # ============================
+# Base44 資料同步
+# ============================
+
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app.base44.com/api')
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 的 LgatUser entity"""
+    url = f'{BASE44_API_URL}/apps/{BASE44_APP_ID}/functions/syncUser'
+    payload = {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', 'balanced'),
+        'coach_style': profile.get('coach_style', 'exploratory'),
+        'quote_freq': profile.get('quote_freq', 'sometimes'),
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[syncUser] OK | {line_user_id}")
+        else:
+            print(f"[syncUser] HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] Error: {e}")
+
+# ============================
 # Dify
 # ============================
 
