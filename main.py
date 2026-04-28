@@ -8,6 +8,9 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import uvicorn
 
+# Base44 backend sync
+from backend_sync import sync_user, save_goal_or_event, detect_goal_keywords
+
 app = FastAPI()
 
 # --- 環境變數 ---
@@ -358,7 +361,6 @@ def build_dify_inputs(profile):
 # Base44 API 呼叫（資料同步）
 # ============================
 
-BASE44_API_URL = 'https://app-ffa38ee7.base44.app/functions'
 
 def sync_user_to_base44(user_id, profile):
     """同步用戶資料到 Base44 後台"""
