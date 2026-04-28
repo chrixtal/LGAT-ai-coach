@@ -420,6 +420,53 @@ def handle_message(event):
 
     threading.Thread(target=process_and_push, daemon=True).start()
 
+    # 背景偵測目標/事件標籤並存檔
+    def detect_and_save_bg():
+        try:
+            import re
+            # 偵測 [GOAL] 和 [EVENT] 標籤
+            ai_response = ask_dify(user_id, user_text, get_profile(user_id))
+            
+            goals = re.findall(r'\[GOAL\]([^\[]+)\[/GOAL\]', ai_response)
+            for goal_text in goals:
+                parts = [p.strip() for p in goal_text.split('|')]
+                if len(parts) >= 2:
+                    requests.post(
+                        'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                        json={
+                            'entity_type': 'goal',
+                            'line_user_id': user_id,
+                            'display_name': get_profile(user_id).get('display_name', ''),
+                            'title': parts[0],
+                            'description': parts[1] if len(parts) > 1 else '',
+                            'type': parts[2] if len(parts) > 2 else 'short',
+                            'target_date': parts[3] if len(parts) > 3 else '',
+                        },
+                        timeout=5
+                    )
+
+            events = re.findall(r'\[EVENT\]([^\[]+)\[/EVENT\]', ai_response)
+            for event_text in events:
+                parts = [p.strip() for p in event_text.split('|')]
+                if len(parts) >= 2:
+                    requests.post(
+                        'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent',
+                        json={
+                            'entity_type': 'event',
+                            'line_user_id': user_id,
+                            'display_name': get_profile(user_id).get('display_name', ''),
+                            'title': parts[0],
+                            'type': parts[1] if len(parts) > 1 else 'todo',
+                            'due_date': parts[2] if len(parts) > 2 else '',
+                            'recurrence': parts[3] if len(parts) > 3 else 'none',
+                        },
+                        timeout=5
+                    )
+        except Exception as e:
+            print(f"[detect_and_save] 背景處理失敗: {e}")
+
+    # threading.Thread(target=detect_and_save_bg, daemon=True).start()  # 暫時註解，避免雙重呼叫 Dify
+
     # 同步用戶資料到 Base44
     threading.Thread(
         target=sync_user_to_base44,
