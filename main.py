@@ -172,6 +172,10 @@ def detect_goal_or_event(user_id, text, profile):
     
     return None
 
+
+# --- Base44 API Endpoint ---
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-69e35caa4e5d9a67dd7dd6e1.base44.app')
+
 # ============================
 # DB helpers
 # ============================
@@ -431,6 +435,19 @@ def sync_user_to_base44(line_user_id, profile):
 
 
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44
+    try:
+        requests.post(f'{BASE44_API_URL}/functions/syncUser', json={
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name'),
+            'coach_tone': profile.get('coach_tone'),
+            'coach_style': profile.get('coach_style'),
+            'quote_freq': profile.get('quote_freq'),
+            'total_messages': profile.get('total_messages', 0) + 1,
+        }, timeout=5)
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
