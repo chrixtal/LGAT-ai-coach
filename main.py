@@ -93,12 +93,9 @@ init_db()
 # ============================
 
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
-BASE44_API_KEY = os.environ.get('BASE44_API_KEY', '')
 
 def sync_user_to_base44(line_user_id, display_name, profile):
     """背景同步用戶資料到 Base44"""
-    if not BASE44_API_KEY:
-        return
     try:
         requests.post(
             f'{BASE44_API_URL}/functions/syncUser',
@@ -119,8 +116,6 @@ def sync_user_to_base44(line_user_id, display_name, profile):
 
 def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
     """儲存目標/事件到 Base44"""
-    if not BASE44_API_KEY:
-        return
     try:
         requests.post(
             f'{BASE44_API_URL}/functions/saveGoalOrEvent',
