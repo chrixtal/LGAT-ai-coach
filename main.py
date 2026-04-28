@@ -426,6 +426,109 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Base44 Backend 串接
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 資料庫"""
+    try:
+        payload = {
+            'line_user_id': user_id,
+            'display_name': profile.get('display_name', ''),
+            'coach_tone': profile.get('coach_tone', 'balanced'),
+            'coach_style': profile.get('coach_style', 'exploratory'),
+            'quote_freq': profile.get('quote_freq', 'sometimes'),
+            'total_messages': profile.get('total_messages', 0),
+        }
+        resp = requests.post(
+            f'{BASE44_API_URL}/functions/syncUser',
+            json=payload,
+            timeout=5
+        )
+        print(f"[Base44 syncUser] status={resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 syncUser] 失敗: {e}")
+
+def detect_and_save_goal_or_event(user_id, text, profile):
+    """偵測用戶訊息中的目標/事件關鍵詞，自動儲存到 Base44"""
+    try:
+        display_name = profile.get('display_name', '')
+        
+        # 短期目標關鍵詞
+        short_goal_keywords = ['希望', '想要', '打算', '這週', '本月', '想完成', '目標是']
+        # 中期目標關鍵詞
+        medium_goal_keywords = ['三個月', '半年', '中期', '季度目標']
+        # 長期目標關鍵詞
+        long_goal_keywords = ['一年', '明年', '長期', '五年計畫', '人生目標']
+        # 習慣關鍵詞
+        habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持', '養成']
+        # 待辦/事件
+        todo_keywords = ['要做', '需要', '今天', '明天', '任務', '做完', '完成']
+        
+        goal_type = None
+        if any(kw in text for kw in short_goal_keywords):
+            goal_type = 'short'
+        elif any(kw in text for kw in medium_goal_keywords):
+            goal_type = 'medium'
+        elif any(kw in text for kw in long_goal_keywords):
+            goal_type = 'long'
+        
+        if goal_type:
+            # 嘗試從訊息中提取標題
+            title = text[:50]  # 簡單方案：取前 50 字
+            payload = {
+                'entity_type': 'goal',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': goal_type,
+            }
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[Base44 Goal] 已保存 | type={goal_type}")
+        
+        elif any(kw in text for kw in habit_keywords):
+            title = text[:50]
+            payload = {
+                'entity_type': 'event',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'habit',
+                'recurrence': 'daily',
+            }
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[Base44 Habit] 已保存")
+        
+        elif any(kw in text for kw in todo_keywords):
+            title = text[:50]
+            payload = {
+                'entity_type': 'event',
+                'line_user_id': user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'todo',
+            }
+            resp = requests.post(
+                f'{BASE44_API_URL}/functions/saveGoalOrEvent',
+                json=payload,
+                timeout=5
+            )
+            print(f"[Base44 Todo] 已保存")
+    
+    except Exception as e:
+        print(f"[Base44 detect_and_save] 失敗: {e}")
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
