@@ -19,6 +19,13 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 
+# ============================
+# Base44 Backend Function URLs
+# ============================
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = f'https://app-ffa38ee7.base44.app/functions'
+
+
 BASE44_APP_ID = "69e35caa4e5d9a67dd7dd6e1"
 BASE44_SERVICE_TOKEN = os.environ.get('BASE44_SERVICE_TOKEN', '')
 BASE44_FUNCTIONS_URL = "https://app-ffa38ee7.base44.app/functions"
@@ -438,6 +445,16 @@ def handle_message(event):
     user_id = event.source.user_id
     user_text = event.message.text
     profile = get_profile(user_id)
+    
+    # 同步用戶資料到 Base44（每次對話都更新）
+    sync_user_to_base44(
+        user_id,
+        display_name=profile.get('display_name'),
+        coach_tone=profile.get('coach_tone'),
+        coach_style=profile.get('coach_style'),
+        quote_freq=profile.get('quote_freq'),
+        total_messages=(profile.get('total_messages', 0) or 0) + 1
+    )
 
     # 1. 指令優先
     command_response = handle_command(user_id, user_text, profile)
