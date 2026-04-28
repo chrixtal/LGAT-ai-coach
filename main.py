@@ -24,6 +24,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, DIFY_API_KEY]):
@@ -347,6 +349,60 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response = requests.post(url, headers=headers, json=data, timeout=120)
     response.raise_for_status()
     return response.json()
+
+
+# ============================
+# Base44 Backend 呼叫
+# ============================
+
+def sync_user_to_base44(line_user_id, display_name, coach_tone, coach_style, quote_freq):
+    """同步用戶資料到 Base44"""
+    try:
+        resp = requests.post(
+            f'{BASE44_API_URL}/syncUser',
+            json={
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'coach_tone': coach_tone,
+                'coach_style': coach_style,
+                'quote_freq': quote_freq,
+            },
+            timeout=5
+        )
+        if resp.ok:
+            print(f"[Base44] syncUser OK for {line_user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 異常: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, user_text):
+    """偵測並儲存目標/事件"""
+    # 簡單的關鍵詞偵測
+    keywords = {
+        'goal': ['想|要|目標|計畫|挑戰|達到|實現', 'short|短期|一個月'],
+        'habit': ['習慣|每天|每週|打卡', '做|完成'],
+        'todo': ['今天|明天|做|待辦|任務', '完成|趕'],
+    }
+    
+    try:
+        # 簡單偵測：若含有目標相關詞就存 goal
+        if any(re.search(kw, user_text) for kw in keywords['goal'][:1]):  # 只看第一組
+            resp = requests.post(
+                f'{BASE44_API_URL}/saveGoalOrEvent',
+                json={
+                    'entity_type': 'goal',
+                    'line_user_id': line_user_id,
+                    'display_name': display_name,
+                    'title': user_text[:50],  # 截前 50 字做標題
+                    'type': 'short',
+                },
+                timeout=5
+            )
+            if resp.ok:
+                print(f"[Base44] 偵測到目標: {user_text[:30]}")
+    except Exception as e:
+        print(f"[Base44] 儲存目標異常: {e}")
 
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
