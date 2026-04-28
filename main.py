@@ -2,6 +2,8 @@ import os
 import sqlite3
 import threading
 import requests
+import json
+import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -12,6 +14,21 @@ import datetime
 import zoneinfo
 
 app = FastAPI()
+
+# --- Base44 API 設定 ---
+BASE44_APP_ID = os.environ.get('BASE44_APP_ID', '69e35caa4e5d9a67dd7dd6e1')
+BASE44_API_BASE = f'https://app-ffa38ee7.base44.app/functions'
+
+def call_base44_function(func_name, payload):
+    """呼叫 Base44 backend function"""
+    try:
+        url = f'{BASE44_API_BASE}/{func_name}'
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Base44] {func_name} 失敗: {e}")
+        return None
 
 # --- 環境變數 ---
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
@@ -286,6 +303,52 @@ def handle_onboarding(line_user_id, text, profile):
 # Dify
 # ============================
 
+def detect_goal_or_event(text, line_user_id, display_name):
+    """偵測用戶輸入中的目標或事件，自動保存到 Base44"""
+    # 目標關鍵詞：「想」、「計畫」、「目標」、「要」、「希望」
+    goal_patterns = [
+        r'(想|計畫|目標|要|希望|決定|打算).{0,20}(跑步|健身|閱讀|學習|工作|旅遊|存錢|減肥|戒菸|早睡)',
+        r'(我的夢想|我想).*',
+    ]
+    
+    # 事件關鍵詞：「完成」、「做了」、「打卡」、「習慣」、「待辦」
+    event_patterns = [
+        r'(完成|做了|打卡|達成|做到).{0,20}',
+        r'(今天|昨天|明天).{0,10}(跑步|健身|閱讀|冥想|運動)',
+    ]
+
+    # 檢查目標
+    for pattern in goal_patterns:
+        if re.search(pattern, text):
+            title = text[:50].strip()
+            payload = {
+                'entity_type': 'goal',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'short',
+            }
+            result = call_base44_function('saveGoalOrEvent', payload)
+            if result:
+                print(f"[Goal] 儲存目標: {title} | user={line_user_id}")
+            break
+
+    # 檢查事件
+    for pattern in event_patterns:
+        if re.search(pattern, text):
+            title = text[:50].strip()
+            payload = {
+                'entity_type': 'event',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'todo',
+            }
+            result = call_base44_function('saveGoalOrEvent', payload)
+            if result:
+                print(f"[Event] 儲存事件: {title} | user={line_user_id}")
+            break
+
 def build_dify_inputs(profile):
     tz = zoneinfo.ZoneInfo("Asia/Taipei")
     now = datetime.datetime.now(tz)
@@ -313,6 +376,20 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     return response.json()
 
 def ask_dify(user_id, text, profile):
+    # 同步用戶資料到 Base44
+    sync_payload = {
+        'line_user_id': user_id,
+        'display_name': profile.get('display_name', ''),
+        'coach_tone': profile.get('coach_tone', ''),
+        'coach_style': profile.get('coach_style', ''),
+        'quote_freq': profile.get('quote_freq', ''),
+        'total_messages': (profile.get('total_messages', 0) or 0) + 1,
+    }
+    call_base44_function('syncUser', sync_payload)
+    
+    # 偵測並保存目標/事件
+    detect_goal_or_event(text, user_id, profile.get('display_name', ''))
+    
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
 
