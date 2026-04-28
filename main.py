@@ -919,6 +919,85 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+# ============================
+# Base44 資料庫同步
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """定期同步用戶資料到 Base44 LgatUser"""
+    url = 'https://app-ffa38ee7.base44.app/functions/syncUser'
+    data = {
+        'line_user_id': line_user_id,
+        'display_name': profile.get('display_name') or '',
+        'coach_tone': profile.get('coach_tone') or 'balanced',
+        'coach_style': profile.get('coach_style') or 'exploratory',
+        'quote_freq': profile.get('quote_freq') or 'sometimes',
+        'total_messages': profile.get('total_messages', 0) + 1,
+    }
+    resp = requests.post(url, json=data, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def detect_and_save_goal_or_event(line_user_id, text, profile):
+    """偵測用戶訊息中的目標或事件關鍵詞，自動儲存到 Base44"""
+    name = profile.get('display_name') or '用戶'
+    
+    # 短期目標關鍵詞
+    short_goal_keywords = ['希望', '想要', '打算', '這週', '本月', '最近', '明天', '下週']
+    # 中期目標關鍵詞
+    medium_goal_keywords = ['三個月', '半年', '中期', '季度']
+    # 長期目標關鍵詞
+    long_goal_keywords = ['一年', '明年', '長期', '五年']
+    # 習慣關鍵詞
+    habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持', '養成']
+    # 待辦關鍵詞
+    todo_keywords = ['要做', '需要', '今天', '明天', '任務', '完成']
+    # 里程碑關鍵詞
+    milestone_keywords = ['達成', '完成', '通過', '拿到', '升職', '考上']
+    
+    url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+    
+    goal_type = None
+    event_type = None
+    title = None
+    
+    # 判斷是目標還是事件
+    if any(kw in text for kw in short_goal_keywords + medium_goal_keywords + long_goal_keywords):
+        goal_type = 'short' if any(kw in text for kw in short_goal_keywords) else 'medium' if any(kw in text for kw in medium_goal_keywords) else 'long'
+        title = text[:30]  # 取前 30 個字作為標題
+    
+    if any(kw in text for kw in habit_keywords):
+        event_type = 'habit'
+        title = text[:30]
+    elif any(kw in text for kw in todo_keywords):
+        event_type = 'todo'
+        title = text[:30]
+    elif any(kw in text for kw in milestone_keywords):
+        event_type = 'milestone'
+        title = text[:30]
+    
+    # 如果偵測到，就儲存
+    if goal_type and title:
+        resp = requests.post(url, json={
+            'entity_type': 'goal',
+            'line_user_id': line_user_id,
+            'display_name': name,
+            'title': title,
+            'type': goal_type,
+        }, timeout=10)
+        print(f"[saveGoalOrEvent] 新增目標: {title} ({goal_type})")
+    
+    if event_type and title:
+        resp = requests.post(url, json={
+            'entity_type': 'event',
+            'line_user_id': line_user_id,
+            'display_name': name,
+            'title': title,
+            'type': event_type,
+        }, timeout=10)
+        print(f"[saveGoalOrEvent] 新增事件: {title} ({event_type})")
+
 # ============================
 # LINE Webhook
 # ============================
