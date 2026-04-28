@@ -18,9 +18,13 @@ DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
 
+# Base44 Functions URLs
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_SYNC_URL = f"{BASE44_API_URL}/functions/syncUser"
+BASE44_SAVE_URL = f"{BASE44_API_URL}/functions/saveGoalOrEvent"
+BASE44_SEND_REMINDERS_URL = f"{BASE44_API_URL}/functions/sendReminders"
+
 # --- Base44 Backend Functions URLs ---
-SYNC_USER_URL = "https://app-ffa38ee7.base44.app/functions/syncUser"
-SAVE_GOAL_OR_EVENT_URL = "https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent"
 
 # ============================
 # 教練設定
@@ -181,7 +185,7 @@ def sync_user_to_backend(line_user_id, profile, total_messages=0):
             "reminder_time": profile.get("reminder_time", "08:00"),
             "plan": profile.get("plan", "free"),
         }
-        resp = requests.post(SYNC_USER_URL, json=payload, timeout=5)
+        resp = requests.post(BASE44_SYNC_URL, json=payload, timeout=5)
         if resp.ok:
             print(f"[syncUser] ✅ {line_user_id}")
         else:
@@ -209,7 +213,7 @@ def detect_and_save_goals_events(line_user_id, display_name, text):
                 goal_title = ''.join(match).strip()[:50]
                 if len(goal_title) > 3:
                     try:
-                        requests.post(SAVE_GOAL_OR_EVENT_URL, json={
+                        requests.post(BASE44_SAVE_URL, json={
                             "entity_type": "goal",
                             "line_user_id": line_user_id,
                             "display_name": display_name,
@@ -230,7 +234,7 @@ def detect_and_save_goals_events(line_user_id, display_name, text):
                 event_title = ''.join(match).strip()[:50]
                 if len(event_title) > 2:
                     try:
-                        requests.post(SAVE_GOAL_OR_EVENT_URL, json={
+                        requests.post(BASE44_SAVE_URL, json={
                             "entity_type": "event",
                             "line_user_id": line_user_id,
                             "display_name": display_name,
