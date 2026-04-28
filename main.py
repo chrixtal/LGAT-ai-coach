@@ -433,6 +433,27 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
+        
+        # 非同步同步用戶資料到 Base44（計數訊息）
+        def sync_user_async():
+            try:
+                requests.post(
+                    'https://app-ffa38ee7.base44.app/functions/syncUser',
+                    json={
+                        'line_user_id': user_id,
+                        'display_name': profile.get('display_name', ''),
+                        'coach_tone': profile.get('coach_tone', ''),
+                        'coach_style': profile.get('coach_style', ''),
+                        'quote_freq': profile.get('quote_freq', ''),
+                        'total_messages': profile.get('total_messages', 0) + 1,
+                    },
+                    timeout=5
+                )
+            except Exception as e:
+                print(f"[syncUser] 失敗: {e}")
+        
+        threading.Thread(target=sync_user_async, daemon=True).start()
+        
         return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
