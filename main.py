@@ -2,6 +2,7 @@ import os
 import sqlite3
 import threading
 import requests
+import re
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -210,8 +211,93 @@ def save_profile(line_user_id, **kwargs):
     conn.close()
 
 # ============================
+# Base44 API 函式（後台同步）
+# ============================
+
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app/functions')
+
+def sync_user_to_base44(line_user_id, display_name, total_messages, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        data = {
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'coach_tone': profile.get('coach_tone'),
+            'coach_style': profile.get('coach_style'),
+            'quote_freq': profile.get('quote_freq'),
+            'total_messages': total_messages,
+            'reminder_enabled': profile.get('reminder_enabled', False),
+            'reminder_time': profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(f'{BASE44_API_URL}/syncUser', json=data, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser OK for {line_user_id}")
+        else:
+            print(f"[Base44] syncUser failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def save_goal_or_event(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        data = {
+            'entity_type': entity_type,
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            **fields,
+        }
+        resp = requests.post(f'{BASE44_API_URL}/saveGoalOrEvent', json=data, timeout=5)
+        if resp.status_code == 200:
+            result = resp.json()
+            print(f"[Base44] save {entity_type} OK: {result}")
+        else:
+            print(f"[Base44] save {entity_type} failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] save {entity_type} error: {e}")
+
+def detect_goal_or_event(text):
+    """
+    偵測用戶訊息中是否有目標或事件關鍵詞
+    回傳 (type, detected_text) 或 None
+    """
+    # 短期目標關鍵詞
+    short_goal_keywords = ['希望', '想要', '打算', '這週', '本月', '今天', '明天']
+    # 中期目標
+    medium_goal_keywords = ['三個月', '半年', '中期']
+    # 長期目標
+    long_goal_keywords = ['一年', '明年', '長期', '五年']
+    # 習慣
+    habit_keywords = ['習慣', '每天', '每週', '打卡', '堅持']
+    # 待辦
+    todo_keywords = ['要做', '需要', '完成', '任務']
+    # 里程碑
+    milestone_keywords = ['達成', '拿到', '升職', '通過']
+
+    for kw in short_goal_keywords:
+        if kw in text:
+            return ('goal_short', text)
+    for kw in medium_goal_keywords:
+        if kw in text:
+            return ('goal_medium', text)
+    for kw in long_goal_keywords:
+        if kw in text:
+            return ('goal_long', text)
+    for kw in habit_keywords:
+        if kw in text:
+            return ('habit', text)
+    for kw in todo_keywords:
+        if kw in text:
+            return ('todo', text)
+    for kw in milestone_keywords:
+        if kw in text:
+            return ('milestone', text)
+
+    return None
+
+# ============================
 # LINE helpers
 # ============================
+
 
 def get_line_display_name(user_id):
     try:
