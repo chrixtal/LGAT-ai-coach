@@ -86,6 +86,7 @@ SYNC_USER_URL = f"{BASE44_API_BASE}/functions/syncUser" if BASE44_API_BASE else 
 SAVE_GOAL_OR_EVENT_URL = f"{BASE44_API_BASE}/functions/saveGoalOrEvent" if BASE44_API_BASE else ""
 
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+DIFY_SATIR_API_KEY = os.environ.get('DIFY_SATIR_API_KEY', 'app-F7quRfiYD3cOvWYHDzpHueUs')
 BASE44_API_BASE = 'https://app-ffa38ee7.base44.app/functions'
 
 # ============================
@@ -819,6 +820,53 @@ def save_goal_or_event_to_base44(user_id, display_name, entity_type, **fields):
         print(f"[saveGoalOrEvent] 失敗: {e}")
 
 
+# ============================
+# 薩提爾模式 helpers
+# ============================
+
+def get_satir_mode(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT satir_mode, satir_conversation_id FROM user_profiles WHERE line_user_id = ?', (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return bool(row[0]), row[1]
+    return False, None
+
+def set_satir_mode(user_id, active, conv_id=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO user_profiles (line_user_id, satir_mode, satir_conversation_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(line_user_id) DO UPDATE SET
+                satir_mode = excluded.satir_mode,
+                satir_conversation_id = excluded.satir_conversation_id""",
+        (user_id, 1 if active else 0, conv_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def ask_satir(user_id, text, profile, satir_conv_id=None):
+    """呼叫薩提爾 Dify Chatflow"""
+    inputs = {
+        "user_name": profile.get('display_name', '朋友'),
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+    }
+    try:
+        result = call_dify(DIFY_SATIR_API_KEY, user_id, text, satir_conv_id, inputs)
+        new_conv_id = result.get('conversation_id')
+        if new_conv_id:
+            set_satir_mode(user_id, True, new_conv_id)
+        answer = result.get('answer', '').strip()
+        return answer if answer else "🌊 我正在幫你整理思路，請再說一次好嗎？"
+    except Exception as e:
+        print(f"[Satir Dify] 錯誤: {e}")
+        return "😓 薩提爾模式暫時出了問題，請稍後再試，或輸入 /exit 回到一般模式。"
+
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -881,6 +929,8 @@ HELP_TEXT = (
     "🔄 /reset    — 清除對話記憶，重新開始\n"
     "⚙️ /setting  — 重新設定教練風格\n"
     "📋 /profile  — 查看目前的設定\n"
+    "🌊 /satir    — 進入薩提爾冰山探索模式\n"
+    "🚪 /exit     — 離開薩提爾，回到一般模式\n"
     "❓ /help     — 顯示這個說明\n\n"
     "直接輸入文字就能和我對話！"
 )
@@ -946,6 +996,22 @@ def handle_command(user_id, text, profile):
     if cmd == '/setting':
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
         return "⚙️ 好的！我們來重新調整一下～\n\n" + _tone_question()
+
+    if cmd == '/satir':
+        set_satir_mode(user_id, True, None)
+        return (
+            "🌊 進入薩提爾冰山探索模式\n\n"
+            "我會陪你一層一層往內看。\n"
+            "先跟我說說，最近有什麼事讓你感到困擾或糾結嗎？\n\n"
+            "（輸入 /exit 可以隨時回到一般模式）"
+        )
+
+    if cmd == '/exit':
+        set_satir_mode(user_id, False, None)
+        return (
+            "✅ 已離開薩提爾模式，回到一般教練對話。\n\n"
+            "剛才的探索辛苦了，有什麼想繼續聊的嗎？😊"
+        )
 
     if cmd == '/profile':
         name = profile.get('display_name') or '未設定'
@@ -1124,7 +1190,12 @@ def handle_message(event):
             # (c) 送 loading animation + 等 Dify 回應
             send_loading_animation(user_id, seconds=60)
             current_profile = get_profile(user_id)
-            ai_response = ask_dify(user_id, user_text, current_profile)
+            # 薩提爾模式 or 一般教練模式
+            in_satir, satir_conv_id = get_satir_mode(user_id)
+            if in_satir:
+                ai_response = ask_satir(user_id, user_text, current_profile, satir_conv_id)
+            else:
+                ai_response = ask_dify(user_id, user_text, current_profile)
             
             if not replied_flag.is_set():
                 replied_flag.set()
