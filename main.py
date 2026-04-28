@@ -20,6 +20,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 DIFY_API_KEY = os.environ.get('DIFY_API_KEY')
 DIFY_API_URL = os.environ.get('DIFY_API_URL', 'https://api.dify.ai/v1')
 DIFY_API_KEY_FALLBACK = os.environ.get('DIFY_API_KEY_FALLBACK', '')
+BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
+BASE44_TOKEN = os.environ.get('BASE44_TOKEN', '')
 
 # Base44 API（用於同步資料）
 BASE44_API_URL = os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')
@@ -216,6 +218,64 @@ def increment_message_count(line_user_id):
 # ============================
 # LINE 輔助
 # ============================
+
+
+# ============================
+# Base44 後台 API 呼叫
+# ============================
+
+def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages, reminder_enabled, reminder_time):
+    """同步用戶資料到 Base44"""
+    if not BASE44_TOKEN:
+        return
+    try:
+        url = f"{BASE44_API_URL}/functions/syncUser"
+        data = {
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "coach_tone": coach_tone,
+            "coach_style": coach_style,
+            "quote_freq": quote_freq,
+            "total_messages": total_messages,
+            "reminder_enabled": reminder_enabled,
+            "reminder_time": reminder_time,
+        }
+        resp = requests.post(url, json=data, headers={"Authorization": f"Bearer {BASE44_TOKEN}"}, timeout=5)
+        if resp.ok:
+            print(f"[Base44] syncUser OK | {user_id}")
+    except Exception as e:
+        print(f"[Base44] syncUser error: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, user_text):
+    """偵測並儲存目標/事件"""
+    if not BASE44_TOKEN:
+        return
+    try:
+        goal_kw = ['目標', '計畫', '想要', '希望', '要達到', '要成為']
+        event_kw = ['習慣', '待辦', '任務', '每天', '每週', '記得']
+        
+        entity_type = None
+        if any(kw in user_text for kw in goal_kw):
+            entity_type = 'goal'
+        elif any(kw in user_text for kw in event_kw):
+            entity_type = 'event'
+        
+        if not entity_type:
+            return
+        
+        title = user_text.split('\n')[0][:50]
+        url = f"{BASE44_API_URL}/functions/saveGoalOrEvent"
+        data = {
+            "entity_type": entity_type,
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "title": title,
+            "description": user_text[:200],
+            "type": "short" if entity_type == "goal" else "todo",
+        }
+        requests.post(url, json=data, headers={"Authorization": f"Bearer {BASE44_TOKEN}"}, timeout=5)
+    except Exception as e:
+        pass
 
 def get_line_display_name(user_id):
     try:
