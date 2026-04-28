@@ -349,6 +349,108 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+
+# ============================
+# Base44 API 橋接
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44 LgatUser"""
+    try:
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': profile.get('display_name') or '',
+            'coach_tone': profile.get('coach_tone') or 'balanced',
+            'coach_style': profile.get('coach_style') or 'exploratory',
+            'quote_freq': profile.get('quote_freq') or 'sometimes',
+            'total_messages': profile.get('total_messages') or 0,
+            'reminder_enabled': profile.get('reminder_enabled') or False,
+            'reminder_time': profile.get('reminder_time') or '08:00',
+            'plan': 'free',  # 預設免費版
+        }
+        resp = requests.post(BASE44_SYNC_URL, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 用戶 {line_user_id} 同步成功")
+        else:
+            print(f"[Base44] 同步失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步錯誤: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': display_name,
+            'entity_type': entity_type,  # goal / event / goal_progress
+            **fields
+        }
+        resp = requests.post(BASE44_SAVE_URL, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] {entity_type} 儲存成功")
+            return resp.json()
+        else:
+            print(f"[Base44] 儲存失敗: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 儲存錯誤: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, display_name, text):
+    """偵測文本中的目標/事件關鍵詞，自動儲存"""
+    import re
+    
+    # 目標關鍵詞
+    goal_patterns = [
+        (r'(我的目標是|我想要|我要)(.*?)([。！？\n]|$)', 'goal'),
+        (r'(短期目標|中期目標|長期目標)[是：]?(.*?)([。！？\n]|$)', 'goal'),
+    ]
+    
+    # 事件關鍵詞
+    event_patterns = [
+        (r'(我要完成|我得|我必須)(.*?)([。！？\n]|$)', 'todo'),
+        (r'(我的習慣是|每天都要|每週)(.*?)([。！？\n]|$)', 'habit'),
+        (r'(我完成了|我做到了)(.*?)([。！？\n]|$)', 'event_done'),
+    ]
+    
+    # 偵測目標
+    for pattern, _ in goal_patterns:
+        match = re.search(pattern, text)
+        if match:
+            title = match.group(2).strip() if len(match.groups()) >= 2 else '未命名目標'
+            if title and len(title) > 2:
+                save_goal_or_event_to_base44(
+                    line_user_id, display_name,
+                    'goal',
+                    title=title,
+                    description='',
+                    type='short'
+                )
+            break
+    
+    # 偵測事件
+    for pattern, event_type in event_patterns:
+        match = re.search(pattern, text)
+        if match:
+            title = match.group(2).strip() if len(match.groups()) >= 2 else '未命名事件'
+            if title and len(title) > 2:
+                if event_type == 'event_done':
+                    # 找最新的目標並標記完成
+                    save_goal_or_event_to_base44(
+                        line_user_id, display_name,
+                        'goal_progress',
+                        title='',
+                        status='completed',
+                        progress_note=title
+                    )
+                else:
+                    save_goal_or_event_to_base44(
+                        line_user_id, display_name,
+                        'event',
+                        title=title,
+                        type=event_type,
+                        due_date=''
+                    )
+            break
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
