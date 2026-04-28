@@ -634,6 +634,7 @@ HELP_TEXT = (
     "🔄 /reset    — 清除對話記憶\n"
     "⚙️ /setting  — 重新設定教練風格\n"
     "📋 /profile  — 查看設定\n"
+    "🔔 /remind   — 開啟主動提醒\n"
     "❓ /help     — 顯示說明"
 )
 
@@ -657,6 +658,19 @@ def handle_command(user_id, text, profile):
         style = next((v['label'] for v in STYLE_OPTIONS.values() if v['value'] == profile.get('coach_style')), '未設定')
         quote = next((v['label'] for v in QUOTE_OPTIONS.values() if v['value'] == profile.get('quote_freq')), '未設定')
         return f"📋 你的教練設定：\n\n👤 名字：{name}\n🎯 語氣：{tone}\n💬 溝通方式：{style}\n📚 引用：{quote}"
+
+    if cmd == '/remind':
+        # 帶用戶去後台設定提醒
+        return (
+            "🔔 主動提醒功能\n\n"
+            "這是標準版及以上方案的功能，我可以定時提醒你：\n"
+            "• 🌅 晨間問候\n"
+            "• 🎯 目標回顧\n"
+            "• 🔄 習慣打卡\n"
+            "• 📊 週報\n\n"
+            "請聯絡開發者 Chris 幫你升級方案，或透過管理後台設定提醒時間：\n"
+            "👉 https://app-ffa38ee7.base44.app"
+        )
 
     return None
 
