@@ -1078,6 +1078,23 @@ def handle_message(event):
     replied_flag = threading.Event()
 
     def process_and_push():
+        # (a) 先同步用戶資料到 Base44
+        try:
+            current_profile = get_profile(user_id)
+            call_backend_api('syncUser', {
+                'line_user_id': user_id,
+                'display_name': current_profile.get('display_name', ''),
+                'coach_tone': current_profile.get('coach_tone', 'balanced'),
+                'coach_style': current_profile.get('coach_style', 'exploratory'),
+                'quote_freq': current_profile.get('quote_freq', 'sometimes'),
+                'total_messages': current_profile.get('total_messages', 0) + 1,
+                'reminder_enabled': current_profile.get('reminder_enabled', False),
+                'reminder_time': current_profile.get('reminder_time', '08:00'),
+            })
+        except Exception as e:
+            print(f"[syncUser] 錯誤: {e}")
+
+        # (b) 偵測並儲存目標/事件
         try:
             # (a) 同步用戶資料到 Base44
             call_backend_api('syncUser', {
@@ -1128,3 +1145,86 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# ============================
+# 提醒排程器（背景執行緒）
+# ============================
+
+import time
+from datetime import datetime
+
+def reminder_scheduler():
+    """每分鐘檢查一次，看有沒有用戶需要提醒"""
+    last_check_day = None
+    checked_today = set()  # 追蹤今天已發過的 reminder id
+
+    while True:
+        try:
+            time.sleep(30)  # 每 30 秒檢查一次（容錯幅度更大）
+
+            now = datetime.now()
+            tw_now = datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+            current_time_str = tw_now.strftime("%H:%M")
+            today_str = tw_now.strftime("%Y-%m-%d")
+
+            # 每天重置
+            if last_check_day != today_str:
+                last_check_day = today_str
+                checked_today = set()
+
+            # 呼叫 Base44 API 取得所有啟用的提醒
+            base44_api = f"{os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')}/api/entities/LgatReminder/filter"
+            resp = requests.post(
+                base44_api,
+                json={"is_active": True},
+                headers={"Authorization": f"Bearer {os.environ.get('BASE44_API_KEY', '')}"},
+                timeout=5
+            )
+
+            if not resp.ok:
+                print(f"[Reminder Scheduler] API 呼叫失敗: {resp.status_code}")
+                continue
+
+            reminders = resp.json().get('data', [])
+
+            for reminder in reminders:
+                if reminder['id'] in checked_today:
+                    continue
+
+                # 時間吻合？
+                if reminder.get('schedule_time') != current_time_str:
+                    continue
+
+                # 找用戶
+                user_id = reminder.get('line_user_id')
+                message = reminder.get('message', '')
+
+                # 組預設訊息
+                if not message:
+                    if reminder['type'] == 'morning_checkin':
+                        message = f"🌅 早安！\n\n新的一天開始了，今天有什麼想達成的事嗎？\n\n澄若水陪你 💪"
+                    elif reminder['type'] == 'goal_review':
+                        message = "🎯 目標進度檢查時間！\n\n花一分鐘跟我分享今天的進展吧～"
+                    elif reminder['type'] == 'habit_reminder':
+                        message = "🔄 今天的習慣打卡時間到了！\n\n完成了嗎？✅"
+                    elif reminder['type'] == 'weekly_report':
+                        message = "📊 本週回顧時間！\n\n這週你做到了什麼？跟我聊聊吧 🌟"
+                    else:
+                        message = f"🔔 提醒：{reminder.get('message', '記得做這件事！')}"
+
+                # 推送
+                try:
+                    line_bot_api.push_message(user_id, TextSendMessage(text=message))
+                    checked_today.add(reminder['id'])
+                    print(f"[Reminder Scheduler] 發送提醒給 {user_id}")
+                except Exception as e:
+                    print(f"[Reminder Scheduler] 推送失敗: {e}")
+
+        except Exception as e:
+            print(f"[Reminder Scheduler] 錯誤: {e}")
+
+# 啟動提醒背景執行緒
+reminder_thread = threading.Thread(target=reminder_scheduler, daemon=True)
+reminder_thread.start()
+print("[Reminder Scheduler] 啟動")
+
