@@ -196,6 +196,70 @@ def send_loading_animation(user_id, seconds=20):
         print(f"[LINE Loading] 失敗: {e}")
 
 # ============================
+# Base44 資料庫同步
+# ============================
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        url = 'https://app-ffa38ee7.base44.app/functions/syncUser'
+        payload = {
+            'line_user_id': line_user_id,
+            'display_name': profile.get('display_name') or '',
+            'coach_tone': profile.get('coach_tone') or 'balanced',
+            'coach_style': profile.get('coach_style') or 'exploratory',
+            'quote_freq': profile.get('quote_freq') or 'sometimes',
+            'total_messages': profile.get('total_messages') or 0,
+            'reminder_enabled': profile.get('reminder_enabled') or False,
+            'reminder_time': profile.get('reminder_time') or '08:00',
+            'plan': profile.get('plan') or 'free',
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44 Sync] 用戶 {line_user_id} 已同步")
+        else:
+            print(f"[Base44 Sync] 同步失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44 Sync] 錯誤: {e}")
+
+def detect_and_save_goal_or_event(line_user_id, user_text, display_name):
+    """偵測用戶訊息中的目標或事件關鍵詞"""
+    try:
+        goal_keywords = ['目標', '想要', '希望', '完成', '達成', '學會', '練習', '我要']
+        event_keywords = ['做', '今天', '明天', '這週', '待辦', '習慣', '打卡', '完成了']
+        
+        is_goal = any(kw in user_text for kw in goal_keywords)
+        is_event = any(kw in user_text for kw in event_keywords)
+        
+        if is_goal and not is_event:
+            match = re.search(r'(我想要|希望|目標是|我要)(.*?)([。！\?]|$)', user_text)
+            title = match.group(2).strip() if match else user_text[:20]
+            
+            url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+            resp = requests.post(url, json={
+                'entity_type': 'goal',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': title,
+                'type': 'short',
+            }, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Goal] 已儲存: {title}")
+        elif is_event and len(user_text) > 4:
+            url = 'https://app-ffa38ee7.base44.app/functions/saveGoalOrEvent'
+            resp = requests.post(url, json={
+                'entity_type': 'event',
+                'line_user_id': line_user_id,
+                'display_name': display_name,
+                'title': user_text[:30],
+                'type': 'todo',
+            }, timeout=5)
+            if resp.status_code == 200:
+                print(f"[Event] 已儲存")
+    except Exception as e:
+        print(f"[Goal/Event Detection] 錯誤: {e}")
+
+# ============================
 # 問卷 Onboarding
 # ============================
 
