@@ -544,6 +544,100 @@ def detect_and_save(user_id, display_name, user_text, ai_response):
         except Exception as e:
             print(f"[Base44] saveEvent 錯誤: {e}")
 
+# ============================
+# Base44 API 橋梁
+# ============================
+
+BASE44_APP_URL = os.environ.get('BASE44_APP_URL', 'https://app-ffa38ee7.base44.app')
+
+def sync_user_to_base44(user_id, profile):
+    """同步用戶資料到 Base44 LgatUser"""
+    try:
+        payload = {
+            "line_user_id": user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+        }
+        resp = requests.post(
+            f'{BASE44_APP_URL}/functions/syncUser',
+            json=payload,
+            timeout=10
+        )
+        print(f"[syncUser] status={resp.status_code}")
+    except Exception as e:
+        print(f"[syncUser] 失敗: {e}")
+
+def detect_and_save_goal_or_event(user_id, profile, user_text, ai_response):
+    """偵測用戶對話中提到的目標/事件並儲存"""
+    try:
+        keywords_goal = ['目標', '想要', '希望', '計畫', '夢想', '要成為', '想達到']
+        keywords_event = ['待辦', '要做', '任務', '習慣', '里程碑', '完成', '打卡']
+        
+        text_lower = user_text.lower()
+        
+        # 檢查是否提到目標
+        if any(kw in text_lower for kw in keywords_goal):
+            # 簡單的目標抽取：用 Dify 回應中的內容作為線索
+            title = None
+            if '「' in ai_response and '」' in ai_response:
+                # 試著找出引號中的內容作為目標名稱
+                start = ai_response.find('「')
+                end = ai_response.find('」', start)
+                if start >= 0 and end > start:
+                    title = ai_response[start+1:end]
+            
+            if title and len(title) > 2 and len(title) < 50:
+                payload = {
+                    "entity_type": "goal",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": title,
+                    "type": "short",  # 預設短期，未來可改善
+                }
+                resp = requests.post(
+                    f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                    json=payload,
+                    timeout=10
+                )
+                print(f"[saveGoal] status={resp.status_code}, title={title}")
+        
+        # 檢查是否提到事件（習慣/待辦）
+        if any(kw in text_lower for kw in keywords_event):
+            title = None
+            if '「' in ai_response and '」' in ai_response:
+                start = ai_response.find('「')
+                end = ai_response.find('」', start)
+                if start >= 0 and end > start:
+                    title = ai_response[start+1:end]
+            
+            if title and len(title) > 2 and len(title) < 50:
+                # 判斷類型
+                event_type = 'todo'
+                if any(h in text_lower for h in ['習慣', '打卡', '每天', '每日']):
+                    event_type = 'habit'
+                
+                payload = {
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": profile.get('display_name', ''),
+                    "title": title,
+                    "type": event_type,
+                }
+                resp = requests.post(
+                    f'{BASE44_APP_URL}/functions/saveGoalOrEvent',
+                    json=payload,
+                    timeout=10
+                )
+                print(f"[saveEvent] status={resp.status_code}, title={title}")
+    except Exception as e:
+        print(f"[detect_and_save] 失敗: {e}")
+
+# ============================
+# Dify API 呼叫（含備援）
+# ============================
+
 def ask_dify(user_id, text, profile):
     conversation_id = get_conversation_id(user_id)
     inputs = build_dify_inputs(profile)
@@ -554,7 +648,16 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-        return answer if answer else "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        if not answer:
+            answer = "🤔 我想到一半忘記說什麼了，請再問我一次！"
+        
+        # 非同步呼叫 syncUser 更新用戶資料
+        threading.Thread(target=lambda: sync_user_to_base44(user_id, profile), daemon=True).start()
+        
+        # 嘗試偵測並儲存目標/事件
+        threading.Thread(target=lambda: detect_and_save_goal_or_event(user_id, profile, text, answer), daemon=True).start()
+        
+        return answer
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         print(f"[Dify Primary] 連線問題: {e} | user={user_id}")
