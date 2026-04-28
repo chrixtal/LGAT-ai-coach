@@ -1,3 +1,43 @@
+# =============================================================================
+# LGAT AI 教練 — LINE Bot 後端主程式
+# =============================================================================
+# 版本歷史：
+#   v1.0  2026-04    初始版本：LINE Bot + Dify 串接，基本對話
+#   v1.1  2026-04    加入 SQLite 用戶檔案、Onboarding 問卷、教練風格設定
+#   v1.2  2026-04    加入 Base44 後台串接：syncUser / saveGoalOrEvent / sendReminders
+#                    自動偵測目標/事件關鍵詞並存入資料庫
+#   v1.3  2026-04    加入薩提爾冰山探索模式：/toggle、/satir、/exit 指令
+#                    薩提爾模組使用獨立 Dify Chatflow（DIFY_SATIR_API_KEY）
+#                    每個用戶的薩提爾對話 ID 獨立保存
+#   v1.4  2026-04    加入維護模式（MAINTENANCE_MODE 環境變數）
+#                    loading animation 改用 thread + push_message 避免 timeout
+#                    防重複回應機制（replied_flag）
+#
+# 環境變數（Zeabur 設定）：
+#   LINE_CHANNEL_ACCESS_TOKEN  — LINE Bot channel access token
+#   LINE_CHANNEL_SECRET        — LINE Bot channel secret
+#   DIFY_API_KEY               — 主教練 Dify Chatflow API Key
+#   DIFY_API_KEY_FALLBACK      — 備援 Dify API Key（選填）
+#   DIFY_SATIR_API_KEY         — 薩提爾模組 Dify Chatflow API Key
+#   DIFY_API_URL               — Dify API 位址（預設 https://api.dify.ai/v1）
+#   DB_PATH                    — SQLite 路徑（預設 /data/lgat.db）
+#   COACH_TONE_OPTIONS         — 教練語氣選項（選填，有預設值）
+#   COACH_STYLE_OPTIONS        — 溝通方式選項（選填，有預設值）
+#   COACH_QUOTE_OPTIONS        — 引用頻率選項（選填，有預設值）
+#   MAINTENANCE_MODE           — 維護模式（true/false）
+#   BASE44_SYNC_USER_URL       — syncUser function URL
+#   BASE44_SAVE_GOAL_URL       — saveGoalOrEvent function URL
+#
+# 指令列表：
+#   /help     — 顯示所有指令
+#   /reset    — 清除對話記憶
+#   /setting  — 重新設定教練風格
+#   /profile  — 查看目前設定
+#   /toggle   — 切換薩提爾 ↔ 一般教練模式
+#   /satir    — 直接進入薩提爾冰山探索模式
+#   /exit     — 離開薩提爾，回到一般教練模式
+# =============================================================================
+
 import os
 import sqlite3
 import threading
@@ -929,7 +969,8 @@ HELP_TEXT = (
     "🔄 /reset    — 清除對話記憶，重新開始\n"
     "⚙️ /setting  — 重新設定教練風格\n"
     "📋 /profile  — 查看目前的設定\n"
-    "🌊 /satir    — 進入薩提爾冰山探索模式\n"
+    "🔀 /toggle   — 切換薩提爾 ↔ 一般教練模式\n"
+    "🌊 /satir    — 直接進入薩提爾冰山探索模式\n"
     "🚪 /exit     — 離開薩提爾，回到一般模式\n"
     "❓ /help     — 顯示這個說明\n\n"
     "直接輸入文字就能和我對話！"
@@ -997,21 +1038,22 @@ def handle_command(user_id, text, profile):
         save_profile(user_id, onboarding_done=0, onboarding_step=2)
         return "⚙️ 好的！我們來重新調整一下～\n\n" + _tone_question()
 
-    if cmd == '/satir':
-        set_satir_mode(user_id, True, None)
-        return (
-            "🌊 進入薩提爾冰山探索模式\n\n"
-            "我會陪你一層一層往內看。\n"
-            "先跟我說說，最近有什麼事讓你感到困擾或糾結嗎？\n\n"
-            "（輸入 /exit 可以隨時回到一般模式）"
-        )
-
-    if cmd == '/exit':
-        set_satir_mode(user_id, False, None)
-        return (
-            "✅ 已離開薩提爾模式，回到一般教練對話。\n\n"
-            "剛才的探索辛苦了，有什麼想繼續聊的嗎？😊"
-        )
+    if cmd in ('/satir', '/exit', '/toggle'):
+        in_satir, _ = get_satir_mode(user_id)
+        if cmd == '/satir' or (cmd == '/toggle' and not in_satir):
+            set_satir_mode(user_id, True, None)
+            return (
+                "🌊 切換到薩提爾冰山探索模式\n\n"
+                "我會陪你一層一層往內看。\n"
+                "先跟我說說，最近有什麼事讓你感到困擾或糾結嗎？\n\n"
+                "（再次輸入 /toggle 或 /exit 可切回一般模式）"
+            )
+        else:
+            set_satir_mode(user_id, False, None)
+            return (
+                "✅ 切換回一般教練模式。\n\n"
+                "剛才的探索辛苦了，有什麼想繼續聊的嗎？😊"
+            )
 
     if cmd == '/profile':
         name = profile.get('display_name') or '未設定'
