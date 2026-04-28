@@ -490,6 +490,54 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     response.raise_for_status()
     return response.json()
 
+# ============================
+# Backend API 呼叫（同步到 Base44）
+# ============================
+
+def get_base44_api_url():
+    """取得 Base44 API 基礎 URL（寫死為當前應用）"""
+    return "https://app-ffa38ee7.base44.app/functions"
+
+def sync_user_to_base44(line_user_id, profile):
+    """同步用戶資料到 Base44"""
+    try:
+        url = f"{get_base44_api_url()}/syncUser"
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": profile.get('display_name', ''),
+            "coach_tone": profile.get('coach_tone', 'balanced'),
+            "coach_style": profile.get('coach_style', 'exploratory'),
+            "quote_freq": profile.get('quote_freq', 'sometimes'),
+            "total_messages": profile.get('total_messages', 0),
+            "reminder_enabled": profile.get('reminder_enabled', False),
+            "reminder_time": profile.get('reminder_time', '08:00'),
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 同步用戶成功: {line_user_id}")
+        else:
+            print(f"[Base44] 同步失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 同步異常: {e}")
+
+def save_goal_or_event_to_base44(line_user_id, display_name, entity_type, **fields):
+    """儲存目標或事件到 Base44"""
+    try:
+        url = f"{get_base44_api_url()}/saveGoalOrEvent"
+        payload = {
+            "line_user_id": line_user_id,
+            "display_name": display_name,
+            "entity_type": entity_type,
+            **fields
+        }
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            print(f"[Base44] 儲存 {entity_type} 成功")
+        else:
+            print(f"[Base44] 儲存失敗 {resp.status_code}: {resp.text}")
+    except Exception as e:
+        print(f"[Base44] 儲存異常: {e}")
+
 def ask_dify(user_id, text, profile):
     # 同步用戶資料到 Base44
     sync_payload = {
