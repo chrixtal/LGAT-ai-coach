@@ -265,14 +265,11 @@ def handle_command(user_id, text, profile):
     return None
 
 
-import json
-import httpx
 
 # ============================
 # Backend API Bridge
 # ============================
 
-BASE44_API_URL = "https://app-ffa38ee7.base44.app/functions"
 
 def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
     """同步用戶資料到 Base44"""
