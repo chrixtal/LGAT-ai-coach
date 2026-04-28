@@ -5,6 +5,7 @@ import os
 import sqlite3
 import threading
 import requests
+from base44_sync import sync_client
 import json
 import re
 from datetime import datetime
