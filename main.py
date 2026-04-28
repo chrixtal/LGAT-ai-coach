@@ -2,6 +2,8 @@ import os
 import sqlite3
 import threading
 import requests
+import json
+import httpx
 from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -556,6 +558,78 @@ def handle_command(user_id, text, profile):
 
     return None
 
+
+import json
+import httpx
+
+# ============================
+# Backend API Bridge
+# ============================
+
+BASE44_API_URL = "https://app-ffa38ee7.base44.app/functions"
+
+def sync_user_to_base44(user_id, display_name, coach_tone, coach_style, quote_freq, total_messages):
+    """同步用戶資料到 Base44"""
+    try:
+        url = f"{BASE44_API_URL}/syncUser"
+        payload = {
+            "line_user_id": user_id,
+            "display_name": display_name,
+            "coach_tone": coach_tone,
+            "coach_style": coach_style,
+            "quote_freq": quote_freq,
+            "total_messages": total_messages,
+        }
+        resp = httpx.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"[Base44] syncUser 成功 | user={user_id}")
+        else:
+            print(f"[Base44] syncUser 失敗: {resp.status_code}")
+    except Exception as e:
+        print(f"[Base44] syncUser 錯誤: {e}")
+
+def detect_and_save_goal_or_event(user_id, display_name, text):
+    """偵測對話中的目標/事件關鍵詞並自動儲存"""
+    # 簡易關鍵詞偵測（可在 Dify 端加入更複雜的邏輯）
+    keywords_goal = ["目標", "想要", "計畫", "要達成", "設定目標", "我的目標"]
+    keywords_event = ["習慣", "待辦", "完成", "已經做了", "做完", "記錄", "打卡"]
+    
+    # 先簡單偵測，後續可由 Dify 回應裡加 [GOAL] [EVENT] tag 來觸發
+    for kw in keywords_goal:
+        if kw in text:
+            try:
+                url = f"{BASE44_API_URL}/saveGoalOrEvent"
+                payload = {
+                    "entity_type": "goal",
+                    "line_user_id": user_id,
+                    "display_name": display_name,
+                    "title": text[:30] + ("..." if len(text) > 30 else ""),
+                    "description": text,
+                    "type": "short",
+                }
+                resp = httpx.post(url, json=payload, timeout=10)
+                print(f"[Base44] 自動儲存目標 | user={user_id}")
+            except Exception as e:
+                print(f"[Base44] 儲存目標失敗: {e}")
+            break
+    
+    for kw in keywords_event:
+        if kw in text:
+            try:
+                url = f"{BASE44_API_URL}/saveGoalOrEvent"
+                payload = {
+                    "entity_type": "event",
+                    "line_user_id": user_id,
+                    "display_name": display_name,
+                    "title": text[:30] + ("..." if len(text) > 30 else ""),
+                    "type": "todo",
+                }
+                resp = httpx.post(url, json=payload, timeout=10)
+                print(f"[Base44] 自動儲存事件 | user={user_id}")
+            except Exception as e:
+                print(f"[Base44] 儲存事件失敗: {e}")
+            break
+
 # ============================
 # LINE Webhook
 # ============================
@@ -609,6 +683,22 @@ def handle_message(event):
             line_bot_api.push_message(user_id, TextSendMessage(text=ai_response))
 
     threading.Thread(target=process_and_push, daemon=True).start()
+
+    # 同步用戶資料到 Base44
+    threading.Thread(
+        target=sync_user_to_base44,
+        args=(user_id, profile.get('display_name') or '', profile.get('coach_tone'), 
+              profile.get('coach_style'), profile.get('quote_freq'), profile.get('total_messages', 0) + 1),
+        daemon=True
+    ).start()
+
+    # 檢測並儲存目標/事件
+    if not onboarding_response and command_response is None:
+        threading.Thread(
+            target=detect_and_save_goal_or_event,
+            args=(user_id, profile.get('display_name') or '', user_text),
+            daemon=True
+        ).start()
 
 # ============================
 # 健康檢查
