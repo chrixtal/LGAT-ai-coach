@@ -896,6 +896,11 @@ def reminder_scheduler():
                 timeout=10
             )
 
+            if resp.status_code == 401:
+                secret_set = bool(os.environ.get('API_SECRET_KEY', ''))
+                print(f"[Reminder Scheduler] 401 Unauthorized | API_SECRET_KEY={'已設定' if secret_set else '未設定'} | headers_sent={list(_base44_headers().keys())}")
+                continue
+
             if resp.status_code == 404:
                 # endpoint 尚未部署，靜默暫停，不要狂刷 log
                 _disable_until = tw_now + timedelta(minutes=DISABLE_MINUTES)
