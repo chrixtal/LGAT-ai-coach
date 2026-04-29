@@ -21,6 +21,13 @@
 #                      → 統一保留最完整的版本（含 goal_progress 偵測）
 #                    - call_backend_api / BASE44_API_URL 等常數：移除重複宣告
 #                    其餘邏輯（Webhook、Onboarding、指令、Dify、排程）完全不動
+#   v1.6  2026-04    【Bug Fix】修復兩個 API 呼叫錯誤：
+#                    - Reminder Scheduler：sendReminders 404 時不再每 30 秒刷 log
+#                      改為靜默暫停 60 分鐘後重試；sleep 間隔從 30s 改為 60s
+#                      無提醒要送時不印 log，降低 log 噪音
+#                    - ask_satir：Dify Chatflow 必填欄位 coach_tone 原本被移除
+#                      導致 400 invalid_param；恢復傳入 coach_tone + user_name
+#                      並加入 HTTPError 詳細錯誤 log 方便排查
 #
 # 環境變數（Zeabur 設定）：
 #   LINE_CHANNEL_ACCESS_TOKEN  — LINE Bot channel access token
@@ -536,9 +543,12 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
 
 def ask_satir(user_id, text, profile, satir_conv_id=None):
     """呼叫薩提爾 Dify Chatflow"""
-    # 只帶 Dify Chatflow 有定義的變數；若 Chatflow 沒有 input 變數則傳空 dict
-    # 避免帶入未定義變數導致 400 Bad Request
-    inputs = {}
+    # 薩提爾 Dify Chatflow 必填欄位：coach_tone
+    # user_name 為選填，帶入方便 Chatflow 個人化回應
+    inputs = {
+        "coach_tone": profile.get('coach_tone', 'balanced'),
+        "user_name": profile.get('display_name', '朋友'),
+    }
     try:
         result = call_dify(DIFY_SATIR_API_KEY, user_id, text, satir_conv_id, inputs)
         new_conv_id = result.get('conversation_id')
