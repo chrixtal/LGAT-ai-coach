@@ -28,6 +28,10 @@
 #                    - ask_satir：Dify Chatflow 必填欄位 coach_tone 原本被移除
 #                      導致 400 invalid_param；恢復傳入 coach_tone + user_name
 #                      並加入 HTTPError 詳細錯誤 log 方便排查
+#   v1.7  2026-04    【Security】Base44 API 呼叫加入 x-secret-key 驗證 header
+#                    - 新增 BASE44_SECRET_KEY 環境變數與 _base44_headers() 共用函數
+#                    - call_backend_api / _sync_to_backend / reminder_scheduler
+#                      全部補上驗證 header，修復 401 Unauthorized 錯誤
 #
 # 環境變數（Zeabur 設定）：
 #   LINE_CHANNEL_ACCESS_TOKEN  — LINE Bot channel access token
@@ -43,6 +47,7 @@
 #   MAINTENANCE_MODE           — 維護模式（true/false）
 #   BASE44_SYNC_USER_URL       — syncUser function URL
 #   BASE44_SAVE_GOAL_URL       — saveGoalOrEvent function URL
+#   BASE44_SECRET_KEY           — Base44 API 驗證密鑰（x-secret-key header）
 #
 # 指令列表：
 #   /help     — 顯示所有指令
@@ -125,13 +130,21 @@ BACKEND_SAVE_GOAL_URL = f'{BASE44_API_BASE}/saveGoalOrEvent'
 # Base44 從環境變數取得（相容舊設定）
 SYNC_USER_URL = os.environ.get('BASE44_SYNC_USER_URL', BACKEND_SYNC_USER_URL)
 SAVE_GOAL_OR_EVENT_URL = os.environ.get('BASE44_SAVE_GOAL_URL', BACKEND_SAVE_GOAL_URL)
+BASE44_SECRET_KEY = os.environ.get('BASE44_SECRET_KEY', '')
+
+def _base44_headers():
+    """回傳帶驗證 header 的 dict"""
+    h = {'Content-Type': 'application/json'}
+    if BASE44_SECRET_KEY:
+        h['x-secret-key'] = BASE44_SECRET_KEY
+    return h
 
 
 def call_backend_api(endpoint, data):
     """呼叫 Base44 backend function"""
     url = f'{BASE44_API_BASE}/{endpoint}'
     try:
-        resp = requests.post(url, json=data, timeout=10)
+        resp = requests.post(url, json=data, headers=_base44_headers(), timeout=10)
         print(f'[Backend API] {endpoint}: {resp.status_code}')
         return resp.json() if resp.ok else None
     except Exception as e:
@@ -651,7 +664,7 @@ def _sync_to_backend(user_id, text, profile, answer):
             'quote_freq': profile.get('quote_freq', 'sometimes'),
             'total_messages': profile.get('total_messages', 0) + 1,
         }
-        sync_resp = requests.post(BACKEND_SYNC_USER_URL, json=sync_data, timeout=5)
+        sync_resp = requests.post(BACKEND_SYNC_USER_URL, json=sync_data, headers=_base44_headers(), timeout=5)
         if sync_resp.status_code == 200:
             print(f"[Backend Sync] User {user_id} synced")
         else:
@@ -677,7 +690,7 @@ def _sync_to_backend(user_id, text, profile, answer):
             elif entity_type == 'goal_progress':
                 goal_data['progress_note'] = text
 
-            goal_resp = requests.post(BACKEND_SAVE_GOAL_URL, json=goal_data, timeout=5)
+            goal_resp = requests.post(BACKEND_SAVE_GOAL_URL, json=goal_data, headers=_base44_headers(), timeout=5)
             if goal_resp.status_code == 200:
                 print(f"[Backend Goal] Saved {entity_type} for {user_id}")
             else:
@@ -873,6 +886,7 @@ def reminder_scheduler():
                     "current_time": current_time_str,
                     "today": today_str
                 },
+                headers=_base44_headers(),
                 timeout=10
             )
 
