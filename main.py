@@ -32,6 +32,12 @@
 #                    - 新增 API_SECRET_KEY 環境變數與 _base44_headers() 共用函數
 #                    - call_backend_api / _sync_to_backend / reminder_scheduler
 #                      全部補上驗證 header，修復 401 Unauthorized 錯誤
+#   v1.8  2026-04    【Bug Fix】修復 API_SECRET_KEY 讀取時機問題與 timeout 過短：
+#                    - _base44_headers() 改為每次動態讀取環境變數
+#                      避免模組載入時讀不到值導致 Reminder 持續 401
+#                    - _sync_to_backend / sync_user_to_base44 / detect_and_save
+#                      timeout 從 5s 調整為 15s，避免 Base44 冷啟動 Read timed out
+#                    - 補齊舊路徑（SYNC_USER_URL / SAVE_GOAL_OR_EVENT_URL）的驗證 header
 #
 # 環境變數（Zeabur 設定）：
 #   LINE_CHANNEL_ACCESS_TOKEN  — LINE Bot channel access token
@@ -130,13 +136,12 @@ BACKEND_SAVE_GOAL_URL = f'{BASE44_API_BASE}/saveGoalOrEvent'
 # Base44 從環境變數取得（相容舊設定）
 SYNC_USER_URL = os.environ.get('BASE44_SYNC_USER_URL', BACKEND_SYNC_USER_URL)
 SAVE_GOAL_OR_EVENT_URL = os.environ.get('BASE44_SAVE_GOAL_URL', BACKEND_SAVE_GOAL_URL)
-BASE44_SECRET_KEY = os.environ.get('API_SECRET_KEY', '')
-
 def _base44_headers():
-    """回傳帶驗證 header 的 dict"""
+    """回傳帶驗證 header 的 dict（每次動態讀取環境變數，避免模組載入時讀不到）"""
     h = {'Content-Type': 'application/json'}
-    if BASE44_SECRET_KEY:
-        h['x-secret-key'] = BASE44_SECRET_KEY
+    secret = os.environ.get('API_SECRET_KEY', '')
+    if secret:
+        h['x-secret-key'] = secret
     return h
 
 
@@ -171,7 +176,7 @@ def sync_user_to_base44(user_id, profile):
             'reminder_enabled': profile.get('reminder_enabled', False),
             'reminder_time': profile.get('reminder_time', '08:00'),
         }
-        resp = requests.post(SYNC_USER_URL, json=data, timeout=5)
+        resp = requests.post(SYNC_USER_URL, json=data, headers=_base44_headers(), timeout=15)
         if resp.ok:
             print(f"[Base44] syncUser OK | user={user_id}")
         else:
@@ -214,7 +219,7 @@ def detect_and_save_goal_or_event(user_id, text, profile):
             payload['type'] = category
             payload['note'] = text
 
-        resp = requests.post(SAVE_GOAL_OR_EVENT_URL, json=payload, timeout=5)
+        resp = requests.post(SAVE_GOAL_OR_EVENT_URL, json=payload, headers=_base44_headers(), timeout=15)
         if resp.ok:
             print(f"[Base44] 已儲存 {entity_type}/{category}: {payload.get('title', payload.get('progress_note', ''))[:30]}")
         else:
@@ -664,7 +669,7 @@ def _sync_to_backend(user_id, text, profile, answer):
             'quote_freq': profile.get('quote_freq', 'sometimes'),
             'total_messages': profile.get('total_messages', 0) + 1,
         }
-        sync_resp = requests.post(BACKEND_SYNC_USER_URL, json=sync_data, headers=_base44_headers(), timeout=5)
+        sync_resp = requests.post(BACKEND_SYNC_USER_URL, json=sync_data, headers=_base44_headers(), timeout=15)
         if sync_resp.status_code == 200:
             print(f"[Backend Sync] User {user_id} synced")
         else:
@@ -690,7 +695,7 @@ def _sync_to_backend(user_id, text, profile, answer):
             elif entity_type == 'goal_progress':
                 goal_data['progress_note'] = text
 
-            goal_resp = requests.post(BACKEND_SAVE_GOAL_URL, json=goal_data, headers=_base44_headers(), timeout=5)
+            goal_resp = requests.post(BACKEND_SAVE_GOAL_URL, json=goal_data, headers=_base44_headers(), timeout=15)
             if goal_resp.status_code == 200:
                 print(f"[Backend Goal] Saved {entity_type} for {user_id}")
             else:
