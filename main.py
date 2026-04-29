@@ -38,6 +38,8 @@
 #                    - _sync_to_backend / sync_user_to_base44 / detect_and_save
 #                      timeout 從 5s 調整為 15s，避免 Base44 冷啟動 Read timed out
 #                    - 補齊舊路徑（SYNC_USER_URL / SAVE_GOAL_OR_EVENT_URL）的驗證 header
+#   v1.9  2026-04    【Bug Fix】修正驗證 header 名稱：x-secret-key → x-api-key
+#                    Base44 後端讀的是 x-api-key，對不上導致持續 401
 #
 # 環境變數（Zeabur 設定）：
 #   LINE_CHANNEL_ACCESS_TOKEN  — LINE Bot channel access token
@@ -140,9 +142,8 @@ def _base44_headers():
     """回傳帶驗證 header 的 dict（每次動態讀取環境變數，避免模組載入時讀不到）"""
     h = {'Content-Type': 'application/json'}
     secret = os.environ.get('API_SECRET_KEY', '')
-    print(f"[Base44 Auth] API_SECRET_KEY={'SET(' + str(len(secret)) + ' chars)' if secret else 'NOT SET'}")
     if secret:
-        h['x-secret-key'] = secret
+        h['x-api-key'] = secret
     return h
 
 
@@ -895,11 +896,6 @@ def reminder_scheduler():
                 headers=_base44_headers(),
                 timeout=10
             )
-
-            if resp.status_code == 401:
-                secret_set = bool(os.environ.get('API_SECRET_KEY', ''))
-                print(f"[Reminder Scheduler] 401 Unauthorized | API_SECRET_KEY={'已設定' if secret_set else '未設定'} | headers_sent={list(_base44_headers().keys())}")
-                continue
 
             if resp.status_code == 404:
                 # endpoint 尚未部署，靜默暫停，不要狂刷 log
