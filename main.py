@@ -600,6 +600,9 @@ def ask_dify(user_id, text, profile):
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
 
+        if not answer:
+            print(f"[Dify] 回傳 answer 為空 | result keys={list(result.keys())} | event={result.get('event')} | full={str(result)[:300]}")
+
         # 後台同步（背景執行，不阻擋回應）
         threading.Thread(target=_sync_to_backend, args=(user_id, text, profile, answer), daemon=True).start()
 
