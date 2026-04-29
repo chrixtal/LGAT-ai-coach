@@ -1285,53 +1285,31 @@ def reminder_scheduler():
                 last_check_day = today_str
                 checked_today = set()
 
-            # 呼叫 Base44 API 取得所有啟用的提醒
-            base44_api = f"{os.environ.get('BASE44_API_URL', 'https://app-ffa38ee7.base44.app')}/api/entities/LgatReminder/filter"
+            # 呼叫 Base44 sendReminders function
+            send_url = os.environ.get(
+                'BASE44_SEND_REMINDERS_URL',
+                'https://app-ffa38ee7.base44.app/functions/sendReminders'
+            )
             resp = requests.post(
-                base44_api,
-                json={"is_active": True},
-                headers={"Authorization": f"Bearer {os.environ.get('BASE44_API_KEY', '')}"},
-                timeout=5
+                send_url,
+                json={
+                    "line_token": os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', ''),
+                    "current_time": current_time_str,
+                    "today": today_str
+                },
+                timeout=10
             )
 
             if not resp.ok:
-                print(f"[Reminder Scheduler] API 呼叫失敗: {resp.status_code}")
+                print(f"[Reminder Scheduler] API 呼叫失敗: {resp.status_code} {resp.text[:100]}")
                 continue
 
-            reminders = resp.json().get('data', [])
-
-            for reminder in reminders:
-                if reminder['id'] in checked_today:
-                    continue
-
-                # 時間吻合？
-                if reminder.get('schedule_time') != current_time_str:
-                    continue
-
-                # 找用戶
-                user_id = reminder.get('line_user_id')
-                message = reminder.get('message', '')
-
-                # 組預設訊息
-                if not message:
-                    if reminder['type'] == 'morning_checkin':
-                        message = f"🌅 早安！\n\n新的一天開始了，今天有什麼想達成的事嗎？\n\n澄若水陪你 💪"
-                    elif reminder['type'] == 'goal_review':
-                        message = "🎯 目標進度檢查時間！\n\n花一分鐘跟我分享今天的進展吧～"
-                    elif reminder['type'] == 'habit_reminder':
-                        message = "🔄 今天的習慣打卡時間到了！\n\n完成了嗎？✅"
-                    elif reminder['type'] == 'weekly_report':
-                        message = "📊 本週回顧時間！\n\n這週你做到了什麼？跟我聊聊吧 🌟"
-                    else:
-                        message = f"🔔 提醒：{reminder.get('message', '記得做這件事！')}"
-
-                # 推送
-                try:
-                    line_bot_api.push_message(user_id, TextSendMessage(text=message))
-                    checked_today.add(reminder['id'])
-                    print(f"[Reminder Scheduler] 發送提醒給 {user_id}")
-                except Exception as e:
-                    print(f"[Reminder Scheduler] 推送失敗: {e}")
+            result = resp.json()
+            sent = result.get('sent', 0)
+            if sent > 0:
+                print(f"[Reminder Scheduler] 時間 {current_time_str}，已發送 {sent} 筆提醒")
+            else:
+                print(f"[Reminder Scheduler] 時間 {current_time_str}，無提醒需發送")
 
         except Exception as e:
             print(f"[Reminder Scheduler] 錯誤: {e}")
