@@ -29,7 +29,7 @@
 #                      導致 400 invalid_param；恢復傳入 coach_tone + user_name
 #                      並加入 HTTPError 詳細錯誤 log 方便排查
 #   v1.7  2026-04    【Security】Base44 API 呼叫加入 x-secret-key 驗證 header
-#                    - 新增 BASE44_SECRET_KEY 環境變數與 _base44_headers() 共用函數
+#                    - 新增 API_SECRET_KEY 環境變數與 _base44_headers() 共用函數
 #                    - call_backend_api / _sync_to_backend / reminder_scheduler
 #                      全部補上驗證 header，修復 401 Unauthorized 錯誤
 #
@@ -47,7 +47,7 @@
 #   MAINTENANCE_MODE           — 維護模式（true/false）
 #   BASE44_SYNC_USER_URL       — syncUser function URL
 #   BASE44_SAVE_GOAL_URL       — saveGoalOrEvent function URL
-#   BASE44_SECRET_KEY           — Base44 API 驗證密鑰（x-secret-key header）
+#   API_SECRET_KEY              — Base44 API 驗證密鑰（x-secret-key header，對應後端 API_SECRET_KEY）
 #
 # 指令列表：
 #   /help     — 顯示所有指令
@@ -130,7 +130,7 @@ BACKEND_SAVE_GOAL_URL = f'{BASE44_API_BASE}/saveGoalOrEvent'
 # Base44 從環境變數取得（相容舊設定）
 SYNC_USER_URL = os.environ.get('BASE44_SYNC_USER_URL', BACKEND_SYNC_USER_URL)
 SAVE_GOAL_OR_EVENT_URL = os.environ.get('BASE44_SAVE_GOAL_URL', BACKEND_SAVE_GOAL_URL)
-BASE44_SECRET_KEY = os.environ.get('BASE44_SECRET_KEY', '')
+BASE44_SECRET_KEY = os.environ.get('API_SECRET_KEY', '')
 
 def _base44_headers():
     """回傳帶驗證 header 的 dict"""

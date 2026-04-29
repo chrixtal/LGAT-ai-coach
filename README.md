@@ -62,7 +62,7 @@ FastAPI (main.py) — Zeabur 部署
 | `MAINTENANCE_MODE` | 維護模式（`true`/`false`） |
 | `BASE44_SYNC_USER_URL` | syncUser function URL |
 | `BASE44_SAVE_GOAL_URL` | saveGoalOrEvent function URL |
-| `BASE44_SECRET_KEY` | Base44 API 驗證密鑰（`x-secret-key` header） |
+| `API_SECRET_KEY` | Base44 API 驗證密鑰（`x-secret-key` header） |
 | `BASE44_SAVE_GOAL_URL` | saveGoalOrEvent function URL |
 | `COACH_TONE_OPTIONS` | 教練語氣選項（自訂格式，有預設值） |
 | `COACH_STYLE_OPTIONS` | 溝通方式選項（自訂格式，有預設值） |
