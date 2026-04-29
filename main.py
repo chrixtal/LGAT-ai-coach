@@ -40,6 +40,9 @@
 #                    - 補齊舊路徑（SYNC_USER_URL / SAVE_GOAL_OR_EVENT_URL）的驗證 header
 #   v1.9  2026-04    【Bug Fix】修正驗證 header 名稱：x-secret-key → x-api-key
 #                    Base44 後端讀的是 x-api-key，對不上導致持續 401
+#   v2.0  2026-04    【核心修復】call_dify 改用 streaming 模式取代 blocking
+#                    advanced-chat Chatflow 在 blocking 模式下 answer 回空字串
+#                    改為 SSE streaming 逐塊拼接，確保 answer 完整接收
 #
 # 環境變數（Zeabur 設定）：
 #   LINE_CHANNEL_ACCESS_TOKEN  — LINE Bot channel access token
@@ -68,6 +71,7 @@
 # =============================================================================
 
 import os
+import json
 import sqlite3
 import threading
 import requests
@@ -543,6 +547,11 @@ def build_dify_inputs(profile):
 # ============================
 
 def call_dify(api_key, user_id, text, conversation_id, inputs):
+    """
+    呼叫 Dify chat-messages API。
+    advanced-chat 模式下 blocking 可能回空 answer，改用 streaming 逐塊拼接。
+    回傳格式與原本 blocking 相容：{'answer': str, 'conversation_id': str, ...}
+    """
     url = f'{DIFY_API_URL}/chat-messages'
     headers = {
         'Authorization': f'Bearer {api_key}',
@@ -551,14 +560,54 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
     data = {
         "inputs": inputs,
         "query": text,
-        "response_mode": "blocking",
+        "response_mode": "streaming",
         "user": user_id,
     }
     if conversation_id:
         data["conversation_id"] = conversation_id
-    response = requests.post(url, headers=headers, json=data, timeout=120)
+
+    response = requests.post(url, headers=headers, json=data, timeout=120, stream=True)
     response.raise_for_status()
-    return response.json()
+
+    answer_chunks = []
+    result = {}
+
+    for line in response.iter_lines():
+        if not line:
+            continue
+        if isinstance(line, bytes):
+            line = line.decode('utf-8')
+        if line.startswith('data: '):
+            raw = line[6:]
+            if raw.strip() == '[DONE]':
+                break
+            try:
+                chunk = json.loads(raw)
+            except Exception:
+                continue
+
+            event = chunk.get('event', '')
+
+            if event == 'agent_message' or event == 'message':
+                answer_chunks.append(chunk.get('answer', ''))
+                # 保留 conversation_id 等 meta
+                for k in ('conversation_id', 'task_id', 'id', 'message_id', 'mode', 'created_at'):
+                    if k in chunk and k not in result:
+                        result[k] = chunk[k]
+
+            elif event == 'message_end':
+                result['metadata'] = chunk.get('metadata', {})
+                for k in ('conversation_id', 'task_id', 'id', 'message_id'):
+                    if k in chunk and k not in result:
+                        result[k] = chunk[k]
+                break
+
+            elif event == 'error':
+                raise Exception(f"Dify streaming error: {chunk.get('message', raw)}")
+
+    result['answer'] = ''.join(answer_chunks).strip()
+    result['event'] = 'message'
+    return result
 
 
 def ask_satir(user_id, text, profile, satir_conv_id=None):
@@ -599,9 +648,6 @@ def ask_dify(user_id, text, profile):
         if new_conv_id:
             save_conversation_id(user_id, new_conv_id)
         answer = result.get('answer', '').strip()
-
-        if not answer:
-            print(f"[Dify] 回傳 answer 為空 | result keys={list(result.keys())} | event={result.get('event')} | full={str(result)[:300]}")
 
         # 後台同步（背景執行，不阻擋回應）
         threading.Thread(target=_sync_to_backend, args=(user_id, text, profile, answer), daemon=True).start()
