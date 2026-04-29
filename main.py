@@ -1264,7 +1264,7 @@ if __name__ == "__main__":
 # ============================
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 def reminder_scheduler():
     """每分鐘檢查一次，看有沒有用戶需要提醒"""
@@ -1275,8 +1275,8 @@ def reminder_scheduler():
         try:
             time.sleep(30)  # 每 30 秒檢查一次（容錯幅度更大）
 
-            now = datetime.now()
-            tw_now = datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+            tw_tz = timezone(timedelta(hours=8))
+            tw_now = datetime.now(tw_tz)
             current_time_str = tw_now.strftime("%H:%M")
             today_str = tw_now.strftime("%Y-%m-%d")
 
