@@ -819,10 +819,13 @@ def reminder_scheduler():
     """每分鐘檢查一次，看有沒有用戶需要提醒"""
     last_check_day = None
     checked_today = set()
+    _endpoint_disabled = False      # sendReminders 不存在時暫停呼叫
+    _disable_until = None           # 暫停到什麼時間
+    DISABLE_MINUTES = 60            # 404 後暫停 60 分鐘再重試
 
     while True:
         try:
-            time.sleep(30)
+            time.sleep(60)  # 每分鐘檢查一次（原本 30 秒改為 60 秒）
 
             tw_tz = timezone(timedelta(hours=8))
             tw_now = datetime.now(tw_tz)
@@ -832,6 +835,15 @@ def reminder_scheduler():
             if last_check_day != today_str:
                 last_check_day = today_str
                 checked_today = set()
+
+            # 如果 endpoint 被標記為不存在，等暫停時間到了再重試
+            if _disable_until is not None and tw_now < _disable_until:
+                continue
+            elif _disable_until is not None:
+                # 暫停時間到，重置，再試一次
+                _disable_until = None
+                _endpoint_disabled = False
+                print("[Reminder Scheduler] 重新嘗試 sendReminders endpoint...")
 
             send_url = os.environ.get(
                 'BASE44_SEND_REMINDERS_URL',
@@ -847,6 +859,13 @@ def reminder_scheduler():
                 timeout=10
             )
 
+            if resp.status_code == 404:
+                # endpoint 尚未部署，靜默暫停，不要狂刷 log
+                _disable_until = tw_now + timedelta(minutes=DISABLE_MINUTES)
+                print(f"[Reminder Scheduler] sendReminders 尚未部署（404），"
+                      f"暫停 {DISABLE_MINUTES} 分鐘後重試。")
+                continue
+
             if not resp.ok:
                 print(f"[Reminder Scheduler] API 呼叫失敗: {resp.status_code} {resp.text[:100]}")
                 continue
@@ -855,8 +874,7 @@ def reminder_scheduler():
             sent = result.get('sent', 0)
             if sent > 0:
                 print(f"[Reminder Scheduler] 時間 {current_time_str}，已發送 {sent} 筆提醒")
-            else:
-                print(f"[Reminder Scheduler] 時間 {current_time_str}，無提醒需發送")
+            # 沒有提醒要送時不印 log，避免 log 爆炸
 
         except Exception as e:
             print(f"[Reminder Scheduler] 錯誤: {e}")
