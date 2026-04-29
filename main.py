@@ -140,6 +140,7 @@ def _base44_headers():
     """回傳帶驗證 header 的 dict（每次動態讀取環境變數，避免模組載入時讀不到）"""
     h = {'Content-Type': 'application/json'}
     secret = os.environ.get('API_SECRET_KEY', '')
+    print(f"[Base44 Auth] API_SECRET_KEY={'SET(' + str(len(secret)) + ' chars)' if secret else 'NOT SET'}")
     if secret:
         h['x-secret-key'] = secret
     return h
