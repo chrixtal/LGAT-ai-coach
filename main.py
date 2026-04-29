@@ -536,10 +536,9 @@ def call_dify(api_key, user_id, text, conversation_id, inputs):
 
 def ask_satir(user_id, text, profile, satir_conv_id=None):
     """呼叫薩提爾 Dify Chatflow"""
-    inputs = {
-        "user_name": profile.get('display_name', '朋友'),
-        "coach_tone": profile.get('coach_tone', 'balanced'),
-    }
+    # 只帶 Dify Chatflow 有定義的變數；若 Chatflow 沒有 input 變數則傳空 dict
+    # 避免帶入未定義變數導致 400 Bad Request
+    inputs = {}
     try:
         result = call_dify(DIFY_SATIR_API_KEY, user_id, text, satir_conv_id, inputs)
         new_conv_id = result.get('conversation_id')
@@ -547,6 +546,14 @@ def ask_satir(user_id, text, profile, satir_conv_id=None):
             set_satir_mode(user_id, True, new_conv_id)
         answer = result.get('answer', '').strip()
         return answer if answer else "🌊 我正在幫你整理思路，請再說一次好嗎？"
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else '未知'
+        try:
+            err_body = e.response.json()
+        except Exception:
+            err_body = e.response.text[:200] if e.response is not None else ''
+        print(f"[Satir Dify] HTTP {status} 錯誤: {err_body}")
+        return "😓 薩提爾模式暫時出了問題，請稍後再試，或輸入 /exit 回到一般模式。"
     except Exception as e:
         print(f"[Satir Dify] 錯誤: {e}")
         return "😓 薩提爾模式暫時出了問題，請稍後再試，或輸入 /exit 回到一般模式。"
